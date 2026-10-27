@@ -283,15 +283,16 @@ export interface MergeBillsResponse {
 //   };
 // }
 export function getCombinedOrderTotals(
-  order: Pick<POSInvoice, 'rounded_total' | 'custom_merged_total'>
+  order: Pick<POSInvoice, 'grand_total' | 'rounded_total' | 'custom_merged_total'>,
+  disableRoundedTotal = false
 ) {
-  const roundedTotal =
-    (order.rounded_total ?? 0) + Math.round(order.custom_merged_total ?? 0);
+  const mergedTotal = Number(order.custom_merged_total ?? 0);
+  const grandTotal = Number(order.grand_total) + mergedTotal;
+  const roundedTotal = disableRoundedTotal
+    ? grandTotal
+    : Number(order.rounded_total) + Math.round(mergedTotal);
 
-  return {
-    grandTotal: roundedTotal,
-    roundedTotal,
-  };
+  return { grandTotal, roundedTotal };
 }
 
 export function isMergedBill(order: Pick<POSInvoice, 'custom_merged_pos_invoice'>) {

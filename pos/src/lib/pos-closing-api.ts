@@ -296,3 +296,36 @@ export async function submitPosClosingEntry(
 ): Promise<{ name: string }> {
   return db.updateDoc('POS Closing Entry', name, { docstatus: 1 });
 }
+
+
+export interface V16ClosingInvoice {
+  name: string;
+  doctype: 'POS Invoice' | 'Sales Invoice';
+  posting_date: string;
+  customer: string;
+  grand_total: number;
+  net_total: number;
+  total_qty: number;
+  total_taxes_and_charges: number;
+  is_return: number;
+  return_against?: string | null;
+}
+
+export interface V16ClosingData {
+  invoices: V16ClosingInvoice[];
+  payments: { mode_of_payment: string; amount: number }[];
+  taxes: { account_head: string; tax_amount: number }[];
+}
+
+export async function getV16ClosingData(
+  start: string,
+  end: string,
+  posProfile: string,
+  user: string
+): Promise<V16ClosingData> {
+  const response = await call.get<{ message: V16ClosingData }>(
+    'erpnext.accounts.doctype.pos_closing_entry.pos_closing_entry.get_invoices',
+    { start, end, pos_profile: posProfile, user }
+  );
+  return response.message;
+}

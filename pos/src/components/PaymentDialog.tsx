@@ -86,7 +86,11 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const totalDiscount = appliedDiscount;
   const discountedTotal = Math.max(0, subtotal - totalDiscount);
   // If discount is applied, round up; else, round normally
-  const finalTotal = appliedDiscount > 0 ? Math.ceil(discountedTotal) : Math.round(discountedTotal);
+  const roundingDisabled =
+    Number(storePosProfile?.disable_rounded_total) === 1;
+  const finalTotal = roundingDisabled
+    ? Number(discountedTotal.toFixed(2))
+    : (appliedDiscount > 0 ? Math.ceil(discountedTotal) : Math.round(discountedTotal));
 
   // Calculate split payment total
   const payments = paymentModes

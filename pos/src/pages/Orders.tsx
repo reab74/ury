@@ -129,8 +129,11 @@ export default function Orders() {
     if (!selectedOrder) {
       return { grandTotal: 0, roundedTotal: 0 };
     }
-    return getCombinedOrderTotals(selectedOrder);
-  }, [selectedOrder]);
+    return getCombinedOrderTotals(
+      selectedOrder,
+      Number(posStore.posProfile?.disable_rounded_total) === 1
+    );
+  }, [selectedOrder, posStore.posProfile?.disable_rounded_total]);
 
   useEffect(() => {
     setOrderActionsMenuOpen(false);
@@ -393,9 +396,10 @@ export default function Orders() {
               {orders.map((order) => {
                 const splitBill = isSplitBill(order);
                 const mergedBill = isMergedBill(order);
-                const cardTotal = mergedBill
-                  ? order.rounded_total + Math.round(order.custom_merged_total ?? 0)
-                  : order.rounded_total;
+                const cardTotal = getCombinedOrderTotals(
+                  order,
+                  Number(posStore.posProfile?.disable_rounded_total) === 1
+                ).roundedTotal;
 
                 return (
                 <Card 
@@ -756,7 +760,7 @@ export default function Orders() {
                       <span>{formatCurrency(selectedOrderTotals.roundedTotal)}</span>
                     </span>
                   ) : (
-                    formatCurrency(selectedOrder.rounded_total)
+                    formatCurrency(selectedOrderTotals.roundedTotal)
                   )}
                 </span>
               </div>

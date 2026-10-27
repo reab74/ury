@@ -1,5 +1,5 @@
 import frappe
-from frappe.desk.page.setup_wizard.setup_wizard import load_languages, load_country, setup_complete
+from frappe.desk.page.setup_wizard.setup_wizard import load_languages, setup_complete
 from frappe.geo.country_info import get_country_info, get_all
 from erpnext.accounts.doctype.account.chart_of_accounts.chart_of_accounts import get_charts_for_country
 import pytz
@@ -13,7 +13,11 @@ def get_setup_defaults():
         frappe.throw("Not permitted")
         
     languages = load_languages()
-    country_data = load_country()
+    company = frappe.defaults.get_user_default("Company")
+    country_data = (
+        frappe.db.get_value("Company", company, "country")
+        if company else None
+    )
     if isinstance(country_data, str):
         detected_country = country_data
     elif isinstance(country_data, dict):

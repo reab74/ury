@@ -18,14 +18,13 @@ import ChecklistGateDialog from './ChecklistGateDialog';
 import { getChecklist } from '../lib/checklist-api';
 import {
   getOpenPosOpeningEntries,
-  getSubCashierPosInvoices,
-  getMainCashierPosInvoices,
+  getV16ClosingData,
+  type V16ClosingData,
   createSubPosClosing,
   submitSubPosClosing,
   createPosClosingEntry,
   submitPosClosingEntry,
   type OpenPosOpeningEntry,
-  type POSClosingInvoice,
   type ClosingPaymentSummary,
 } from '../lib/pos-closing-api';
 
@@ -97,39 +96,6 @@ interface AggregatedTotals {
   totalQty: number;
 }
 
-/**
- * Aggregates raw POS Invoice dicts into closing totals and per-mode expected
- * amounts, faithfully porting the logic in
- * ury/ury/doctype/sub_pos_closing/sub_pos_closing.js (refresh_payments /
- * set_form_data): sums grand_total/net_total/total_qty, and for each
- * payment subtracts the invoice's change_amount when the payment account
- * matches account_for_change_amount before accumulating by mode_of_payment.
- */
-function aggregateInvoices(invoices: POSClosingInvoice[]): {
-  totals: AggregatedTotals;
-  expectedByMode: Record<string, number>;
-} {
-  const totals: AggregatedTotals = { grandTotal: 0, netTotal: 0, totalQty: 0 };
-  const expectedByMode: Record<string, number> = {};
-
-  invoices.forEach((invoice) => {
-    totals.grandTotal += Number(invoice.grand_total) || 0;
-    totals.netTotal += Number(invoice.net_total) || 0;
-    totals.totalQty += Number(invoice.total_qty) || 0;
-
-    (invoice.payments || []).forEach((payment) => {
-      let amount = Number(payment.amount) || 0;
-      if (payment.account === invoice.account_for_change_amount) {
-        amount -= Number(invoice.change_amount) || 0;
-      }
-      expectedByMode[payment.mode_of_payment] =
-        (expectedByMode[payment.mode_of_payment] || 0) + amount;
-    });
-  });
-
-  return { totals, expectedByMode };
-}
-
 function buildRows(
   openingBalances: OpeningBalanceDetail[],
   expectedByMode: Record<string, number>
@@ -140,7 +106,7 @@ function buildRows(
     rows.set(detail.mode_of_payment, {
       mode_of_payment: detail.mode_of_payment,
       opening_amount: Number(detail.opening_amount) || 0,
-      expected_amount: 0,
+      expected_amount: Number(detail.opening_amount) || 0,
       closing_amount: 0,
       difference: 0,
     });
@@ -149,7 +115,7 @@ function buildRows(
   Object.entries(expectedByMode).forEach(([mode, expected]) => {
     const existing = rows.get(mode);
     if (existing) {
-      existing.expected_amount = expected;
+      existing.expected_amount += expected;
     } else {
       rows.set(mode, {
         mode_of_payment: mode,
@@ -174,6 +140,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
   const [isSubCashier, setIsSubCashier] = useState(false);
   const [periodEndDate, setPeriodEndDate] = useState<Date>(new Date());
   const [invoiceCount, setInvoiceCount] = useState(0);
+  const [closingData, setClosingData] = useState<V16ClosingData | null>(null);
   const [totals, setTotals] = useState<AggregatedTotals>({ grandTotal: 0, netTotal: 0, totalQty: 0 });
   const [rows, setRows] = useState<ClosingPaymentSummary[]>([]);
   const [isSubmitting, setIsSubmitting] = useState(false);
@@ -204,6 +171,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
     setIsLoading(true);
     setLoadError(null);
     setSubmitError(null);
+    setClosingData(null);
 
     try {
       const openEntries = await getOpenPosOpeningEntries(posProfile.name);
@@ -249,16 +217,36 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
       setPeriodEndDate(now);
       const end = formatDateTime(now);
 
-      const [invoices, openingDoc] = await Promise.all([
+      if (
+        Number(posProfile.multiple_cashier) === 1 ||
         subCashier
-          ? getSubCashierPosInvoices(ownEntry.period_start_date, end, posProfile.name, user.name)
-          : getMainCashierPosInvoices(ownEntry.period_start_date, end, posProfile.name, user.name),
+      ) {
+        throw new Error(
+          'Multiple-cashier closing is not yet supported by this v16 adapter.'
+        );
+      }
+
+      const [data, openingDoc] = await Promise.all([
+        getV16ClosingData(
+          ownEntry.period_start_date, end, posProfile.name, user.name
+        ),
         db.getDoc<OpeningEntryDoc>('POS Opening Entry', ownEntry.name),
       ]);
 
-      setInvoiceCount(invoices.length);
-      const { totals: aggregatedTotals, expectedByMode } = aggregateInvoices(invoices);
-      setTotals(aggregatedTotals);
+      setClosingData(data);
+      setInvoiceCount(data.invoices.length);
+      setTotals(data.invoices.reduce((total, invoice) => ({
+        grandTotal: total.grandTotal + Number(invoice.grand_total || 0),
+        netTotal: total.netTotal + Number(invoice.net_total || 0),
+        totalQty: total.totalQty + Number(invoice.total_qty || 0),
+      }), { grandTotal: 0, netTotal: 0, totalQty: 0 }));
+
+      const expectedByMode: Record<string, number> = {};
+      data.payments.forEach((payment) => {
+        expectedByMode[payment.mode_of_payment] =
+          (expectedByMode[payment.mode_of_payment] || 0) +
+          Number(payment.amount || 0);
+      });
       setRows(buildRows(openingDoc?.balance_details ?? [], expectedByMode));
       setTouchedModes(new Set());
     } catch (error) {
@@ -341,7 +329,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
   };
 
   const handleConfirmSubmit = async () => {
-    if (!openingEntry || !posProfile || !user) return;
+    if (!openingEntry || !posProfile || !user || !closingData) return;
 
     setShowConfirm(false);
     setIsSubmitting(true);
@@ -389,6 +377,35 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
             period_end_date: formatDateTime(periodEndDate),
             posting_date: formatDate(periodEndDate),
             posting_time: formatTime(periodEndDate),
+            pos_invoices: closingData.invoices
+              .filter((invoice) => invoice.doctype === 'POS Invoice')
+              .map((invoice) => ({
+                pos_invoice: invoice.name,
+                posting_date: invoice.posting_date,
+                customer: invoice.customer,
+                grand_total: invoice.grand_total,
+                is_return: invoice.is_return,
+                return_against: invoice.return_against,
+              })),
+            sales_invoices: closingData.invoices
+              .filter((invoice) => invoice.doctype === 'Sales Invoice')
+              .map((invoice) => ({
+                sales_invoice: invoice.name,
+                posting_date: invoice.posting_date,
+                customer: invoice.customer,
+                grand_total: invoice.grand_total,
+                is_return: invoice.is_return,
+                return_against: invoice.return_against,
+              })),
+            taxes: closingData.taxes.map((tax) => ({
+              account_head: tax.account_head,
+              amount: tax.tax_amount,
+            })),
+            total_taxes_and_charges: closingData.invoices.reduce(
+              (sum, invoice) =>
+                sum + Number(invoice.total_taxes_and_charges || 0),
+              0
+            ),
             payment_reconciliation: paymentReconciliation,
             grand_total: totals.grandTotal,
             net_total: totals.netTotal,
@@ -405,7 +422,36 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
       if (kind === 'sub') {
         await submitSubPosClosing(docName);
       } else {
-        await submitPosClosingEntry(docName);
+        const saved = await db.getDoc<{
+          name: string;
+          docstatus: number;
+          status: string;
+          error_message?: string;
+        }>('POS Closing Entry', docName);
+
+        if (saved.docstatus === 0) {
+          await db.updateDoc('POS Closing Entry', docName, {
+            payment_reconciliation: paymentReconciliation,
+          });
+          await submitPosClosingEntry(docName);
+        } else if (saved.docstatus !== 1) {
+          throw new Error('This closing document is no longer a draft.');
+        }
+
+        const result = await db.getDoc<{
+          name: string;
+          docstatus: number;
+          status: string;
+          error_message?: string;
+        }>('POS Closing Entry', docName);
+
+        if (result.docstatus !== 1 || result.status !== 'Submitted') {
+          throw new Error(
+            `Closing ${docName}: ${result.status}. ` +
+            (result.error_message ||
+              'Check the closing document in Desk before continuing.')
+          );
+        }
       }
 
       // Final success -- stop tracking the draft.
