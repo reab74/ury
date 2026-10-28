@@ -222,10 +222,11 @@ def _backfill_split_groups(invoices):
     if not parent_names:
         return
 
-    parent_rows = frappe.get_all(
+    parent_rows = frappe.get_list(
         "POS Invoice",
         filters={"name": ["in", parent_names]},
         fields=["name", "custom_split_group"],
+        limit_page_length=0,
     )
     parent_group_map = {
         row.name: row.custom_split_group
@@ -253,15 +254,15 @@ def _enrich_split_group_meta(invoices):
             inv["split_siblings"] = []
         return invoices
 
-    group_members = frappe.db.sql(
-        """
-        SELECT name, custom_split_group
-        FROM `tabPOS Invoice`
-        WHERE custom_split_group IN %(groups)s AND docstatus < 2
-        ORDER BY creation asc
-        """,
-        {"groups": groups},
-        as_dict=True,
+    group_members = frappe.get_list(
+        "POS Invoice",
+        filters={
+            "custom_split_group": ["in", groups],
+            "docstatus": ["<", 2],
+        },
+        fields=["name", "custom_split_group"],
+        order_by="creation asc",
+        limit_page_length=0,
     )
 
     group_order = {}
@@ -269,11 +270,12 @@ def _enrich_split_group_meta(invoices):
         group_order.setdefault(row.custom_split_group, []).append(row.name)
 
     for group, names in list(group_order.items()):
-        children = frappe.get_all(
+        children = frappe.get_list(
             "POS Invoice",
             filters={"custom_split_from": ["in", names], "docstatus": ["<", 2]},
             fields=["name"],
             order_by="creation asc",
+            limit_page_length=0,
         )
         for child in children:
             if child.name not in names:
@@ -389,192 +391,17 @@ def get_split_group(invoice):
 
 @frappe.whitelist()
 def getInvoiceForCashier(status, cashier, limit, limit_start):
-    branch = getBranch()
-    updatedlist = []
-    limit = int(limit)+1
-    limit_start = int(limit_start)
-    if status == "Draft":
-        invoices = frappe.db.sql(
-            """
-            SELECT 
-                name, invoice_printed, grand_total, restaurant_table, custom_merged_tables,
-                cashier, waiter, net_total, posting_time, 
-                total_taxes_and_charges, customer, status, mobile_number, 
-                posting_date, rounded_total, order_type 
-            FROM `tabPOS Invoice` 
-            WHERE branch = %s AND status = %s AND cashier = %s
-            AND (invoice_printed = 1 OR (invoice_printed = 0 AND COALESCE(restaurant_table, '') = ''))
-            ORDER BY modified desc
-            LIMIT %s OFFSET %s
-            """,
-            (branch, status, cashier, limit,limit_start),
-            as_dict=True,
-        )
-        updatedlist.extend(invoices)
-    elif status == "Unbilled":
-        
-        docstatus = "Draft"
-        invoices = frappe.db.sql(
-            """
-            SELECT 
-                name, invoice_printed, grand_total, restaurant_table, custom_merged_tables,
-                cashier, waiter, net_total, posting_time, 
-                total_taxes_and_charges, customer, status, mobile_number, 
-                posting_date, rounded_total, order_type 
-            FROM `tabPOS Invoice` 
-            WHERE branch = %s AND status = %s AND cashier = %s
-            AND (invoice_printed = 0 AND restaurant_table IS NOT NULL)
-            ORDER BY modified desc
-            LIMIT %s OFFSET %s
-            """,
-            (branch, docstatus, cashier, limit, limit_start),
-            as_dict=True,
-        )
-        updatedlist.extend(invoices)
-    elif status == "Recently Paid":
-        docstatus = "Paid"
-        invoices = frappe.db.sql(
-            """
-            SELECT 
-                name, invoice_printed, grand_total, restaurant_table, custom_merged_tables,
-                cashier, waiter, net_total, posting_time, 
-                total_taxes_and_charges, customer, status, mobile_number,
-                posting_date, rounded_total, order_type,additional_discount_percentage,discount_amount 
-            FROM `tabPOS Invoice` 
-            WHERE branch = %s AND status = %s AND cashier = %s
-            ORDER BY modified desc
-            LIMIT %s OFFSET %s
-            """,
-            (branch, docstatus, cashier, limit, limit_start),
-            as_dict=True,
-        )
-        updatedlist.extend(invoices)    
-    else:
-        
-        invoices = frappe.db.sql(
-            """
-            SELECT 
-                name, invoice_printed, grand_total, restaurant_table, custom_merged_tables,
-                cashier, waiter, net_total, posting_time, 
-                total_taxes_and_charges, customer, status, mobile_number,
-                posting_date, rounded_total, order_type,additional_discount_percentage,discount_amount
-            FROM `tabPOS Invoice` 
-            WHERE branch = %s AND status = %s AND cashier = %s
-            ORDER BY modified desc
-            LIMIT %s OFFSET %s
-            """,
-            (branch, status, cashier, limit, limit_start),
-            as_dict=True,
-        )
-
-        updatedlist.extend(invoices)
-    if len(updatedlist) == limit and status != "Recently Paid":
-            next = True
-            updatedlist.pop()
-    else:
-            next = False   
-    return  { "data":updatedlist,"next":next}
+    return _get_permitted_order_list(
+        status, limit, limit_start, cashier=cashier
+    )
 
 
 
 @frappe.whitelist()
 def getPosInvoice(status, limit, limit_start):
-    branch = getBranch()
-    updatedlist = []
-    limit = int(limit)+1
-    limit_start = int(limit_start)
-    if status == "Draft":
-        invoices = frappe.db.sql(
-            """
-            SELECT 
-                name, invoice_printed, grand_total, restaurant_table, custom_merged_tables,
-                cashier, waiter, net_total, posting_time, 
-                total_taxes_and_charges, customer, status, mobile_number, 
-                posting_date, rounded_total, order_type,
-                custom_split_group, custom_split_from,
-                custom_merged_pos_invoice, custom_merged_total,
-                additional_discount_percentage, discount_amount
-            FROM `tabPOS Invoice` 
-            WHERE branch = %s AND status = %s 
-            AND (invoice_printed = 1 OR (invoice_printed = 0 AND COALESCE(restaurant_table, '') = ''))
-            ORDER BY modified desc
-            LIMIT %s OFFSET %s
-            """,
-            (branch, status, limit,limit_start),
-            as_dict=True,
-        )
-        updatedlist.extend(invoices)
-    elif status == "Unbilled":
-        
-        docstatus = "Draft"
-        invoices = frappe.db.sql(
-            """
-            SELECT 
-                name, invoice_printed, grand_total, restaurant_table, custom_merged_tables,
-                cashier, waiter, net_total, posting_time, 
-                total_taxes_and_charges, customer, status, mobile_number, 
-                posting_date, rounded_total, order_type,
-                custom_split_group, custom_split_from,
-                custom_merged_pos_invoice, custom_merged_total,
-                additional_discount_percentage, discount_amount
-            FROM `tabPOS Invoice` 
-            WHERE branch = %s AND status = %s 
-            AND (invoice_printed = 0 AND restaurant_table IS NOT NULL)
-            ORDER BY modified desc
-            LIMIT %s OFFSET %s
-            """,
-            (branch, docstatus, limit, limit_start),
-            as_dict=True,
-        )
-        updatedlist.extend(invoices)
-    elif status == "Recently Paid":
-        docstatus = "Paid"
-        invoices = frappe.db.sql(
-            """
-            SELECT 
-                name, invoice_printed, grand_total, restaurant_table, custom_merged_tables,
-                cashier, waiter, net_total, posting_time, 
-                total_taxes_and_charges, customer, status, mobile_number,
-                posting_date, rounded_total, order_type, additional_discount_percentage,
-                discount_amount, custom_split_group, custom_split_from,
-                custom_merged_pos_invoice, custom_merged_total
-            FROM `tabPOS Invoice` 
-            WHERE branch = %s AND status = %s 
-            ORDER BY modified desc
-            LIMIT %s OFFSET %s
-            """,
-            (branch, docstatus, limit, limit_start),
-            as_dict=True,
-        )
-        updatedlist.extend(invoices)    
-    else:
-        
-        invoices = frappe.db.sql(
-            """
-            SELECT 
-                name, invoice_printed, grand_total, restaurant_table, custom_merged_tables,
-                cashier, waiter, net_total, posting_time, 
-                total_taxes_and_charges, customer, status, mobile_number,
-                posting_date, rounded_total, order_type, additional_discount_percentage,
-                discount_amount, custom_split_group, custom_split_from,
-                custom_merged_pos_invoice, custom_merged_total
-            FROM `tabPOS Invoice` 
-            WHERE branch = %s AND status = %s 
-            ORDER BY modified desc
-            LIMIT %s OFFSET %s
-            """,
-            (branch, status, limit, limit_start),
-            as_dict=True,
-        )
-
-        updatedlist.extend(invoices)
-    if len(updatedlist) == limit and status != "Recently Paid":
-            next = True
-            updatedlist.pop()
-    else:
-            next = False
-    updatedlist = _enrich_split_group_meta(updatedlist)
-    return  { "data":updatedlist,"next":next}
+    return _get_permitted_order_list(
+        status, limit, limit_start, enrich=True
+    )
 
 
 @frappe.whitelist()
@@ -602,7 +429,7 @@ def searchPosInvoice(query,status):
             "restaurant_table": ["not in", [None, ""]],  # Check if restaurant_table has value
             "invoice_printed": 0  # Check if invoice_printed is 0
         })
-    pos_invoices = frappe.get_all(
+    pos_invoices = frappe.get_list(
         "POS Invoice",
         filters=filters,           
         or_filters=[
@@ -715,7 +542,9 @@ def getPosProfile():
     cashier = None
     owner = None
     posProfile = frappe.db.exists("POS Profile", {"branch": branchName})
-    pos_profiles = frappe.get_doc("POS Profile", posProfile)
+    if not posProfile:
+        frappe.throw(_("No POS Profile is configured for your branch."))
+    pos_profiles = _require_ury_profile_access(posProfile)
     global_defaults = frappe.get_single('Global Defaults')
     disable_rounded_total = global_defaults.disable_rounded_total
     
@@ -984,36 +813,30 @@ def create_customer(customer_name, mobile_number=None, customer_group="Individua
 
 @frappe.whitelist()
 def get_open_pos_opening_entries(pos_profile):
-    """Currently open (status=Open, submitted) POS Opening Entries for the
-    given POS Profile. Backs the React Closing flow (pos-closing-api.ts's
-    getOpenPosOpeningEntries) so it can find the requesting user's own
-    session -- referenced there since the POSClosingDialog work landed, but
-    never actually implemented until now (found via a live E2E test: the
-    Close Shift dialog failed outright with "no attribute
-    'get_open_pos_opening_entries'").
+    """Return permitted open sessions for an accessible POS Profile."""
+    profile = frappe.get_doc("POS Profile", pos_profile)
+    profile.check_permission("read")
 
-    Read-only, no cross-branch/company filtering beyond `pos_profile` itself
-    -- matches this file's existing convention for closing-flow helpers
-    (validate_pos_close, _get_main_cashier_status), which likewise scope by
-    pos_profile alone and rely on frappe.has_permission on the returned
-    POS Invoice-adjacent data downstream for anything more granular.
-    """
-    if not frappe.has_permission("POS Opening Entry", "read"):
-        frappe.throw(_("Not permitted to view POS Opening Entries."), frappe.PermissionError)
+    frappe.has_permission(
+        "POS Opening Entry", "read", throw=True
+    )
 
-    return frappe.get_all(
+    return frappe.get_list(
         "POS Opening Entry",
         filters={
-            "pos_profile": pos_profile,
+            "pos_profile": profile.name,
+            "company": profile.company,
             "status": "Open",
             "docstatus": 1,
         },
         fields=["name", "period_start_date", "user", "pos_profile"],
+        limit_page_length=0,
     )
 
 
 @frappe.whitelist()
 def validate_pos_close(pos_profile):
+    _require_ury_profile_access(pos_profile)
     enable_unclosed_pos_check = frappe.db.get_value("POS Profile",pos_profile,"custom_daily_pos_close")
     
     if enable_unclosed_pos_check:
@@ -1057,10 +880,16 @@ def _get_allowed_pos_profiles(company: str, user: str) -> list:
     if not company or not user:
         return []
 
-    profiles = frappe.get_all(
+    if user != frappe.session.user:
+        frappe.throw(_("Not permitted."), frappe.PermissionError)
+
+    frappe.get_doc("Company", company).check_permission("read")
+
+    profiles = frappe.get_list(
         "POS Profile",
         filters={"company": company, "disabled": 0},
         fields=["name"],
+        limit_page_length=0,
     )
     if not profiles:
         return []
@@ -1100,7 +929,7 @@ def _get_main_cashier_status(pos_profile_name: str) -> dict:
         return {"enabled": False, "main_cashier_configured": False, "main_cashier_open": False}
 
     try:
-        pos_profile_doc = frappe.get_doc("POS Profile", pos_profile_name)
+        pos_profile_doc = _require_ury_profile_access(pos_profile_name)
         enabled = bool(pos_profile_doc.custom_enable_multiple_cashier)
 
         main_cashier = None
@@ -1131,6 +960,8 @@ def _get_main_cashier_status(pos_profile_name: str) -> dict:
             "main_cashier_configured": main_cashier_configured,
             "main_cashier_open": main_cashier_open,
         }
+    except frappe.PermissionError:
+        raise
     except Exception:
         return {"enabled": False, "main_cashier_configured": False, "main_cashier_open": False}
 
@@ -1155,7 +986,9 @@ def create_pos_opening_entry(pos_profile: str, company: str, balance_details) ->
     if isinstance(balance_details, str):
         balance_details = json.loads(balance_details)
 
-    pos_profile_doc = frappe.get_doc("POS Profile", pos_profile)
+    pos_profile_doc = _require_ury_profile_access(pos_profile)
+    if company != pos_profile_doc.company:
+        frappe.throw(_("Company does not match the selected POS Profile."))
 
     if not pos_profile_doc.branch:
         frappe.throw(_("Selected POS Profile has no Branch."))
@@ -1210,6 +1043,10 @@ def get_pos_opening_screen_data() -> dict:
     if not company:
         company = frappe.db.get_default("Company")
 
+    if not company:
+        frappe.throw(_("Set an allowed default Company for this user."))
+    frappe.get_doc("Company", company).check_permission("read")
+
     allowed_profiles = _get_allowed_pos_profiles(company, user)
 
     # Resolve the active POS Profile. Prefer the existing URY helper; fall
@@ -1219,6 +1056,14 @@ def get_pos_opening_screen_data() -> dict:
     try:
         pos_profile_data = getPosProfile()
         pos_profile_name = pos_profile_data.get("pos_profile")
+        allowed_names = {row["name"] for row in allowed_profiles}
+        if pos_profile_name and pos_profile_name not in allowed_names:
+            frappe.throw(
+                _("Your branch profile is not allowed for the selected company."),
+                frappe.PermissionError,
+            )
+    except frappe.PermissionError:
+        raise
     except Exception:
         pos_profile_data = None
         pos_profile_name = None
@@ -1226,7 +1071,7 @@ def get_pos_opening_screen_data() -> dict:
     if not pos_profile_name and allowed_profiles:
         pos_profile_name = allowed_profiles[0]["name"]
         try:
-            pos_profile_doc = frappe.get_doc("POS Profile", pos_profile_name)
+            pos_profile_doc = _require_ury_profile_access(pos_profile_name)
             pos_profile_data = {
                 "pos_profile": pos_profile_doc.name,
                 "branch": pos_profile_doc.branch,
@@ -1237,6 +1082,8 @@ def get_pos_opening_screen_data() -> dict:
                 "multiple_cashier": pos_profile_doc.custom_enable_multiple_cashier,
                 "custom_daily_pos_close": pos_profile_doc.custom_daily_pos_close,
             }
+        except frappe.PermissionError:
+            raise
         except Exception:
             pos_profile_data = None
 
@@ -1244,11 +1091,13 @@ def get_pos_opening_screen_data() -> dict:
     payment_modes = []
     if pos_profile_name:
         try:
-            pos_profile_doc = frappe.get_doc("POS Profile", pos_profile_name)
+            pos_profile_doc = _require_ury_profile_access(pos_profile_name)
             payment_modes = [
                 {"mode_of_payment": mop.mode_of_payment, "opening_amount": 0.0}
                 for mop in pos_profile_doc.payments
             ]
+        except frappe.PermissionError:
+            raise
         except Exception:
             payment_modes = []
 
@@ -1257,6 +1106,8 @@ def get_pos_opening_screen_data() -> dict:
     if pos_profile_name:
         try:
             daily_close_pending = validate_pos_close(pos_profile_name) == "Failed"
+        except frappe.PermissionError:
+            raise
         except Exception:
             daily_close_pending = False
 
@@ -1268,10 +1119,11 @@ def get_pos_opening_screen_data() -> dict:
     can_submit = bool(frappe.has_permission("POS Opening Entry", "submit"))
 
     # Existing open entries for the current user (user-wide check).
-    open_entries = frappe.get_all(
+    open_entries = frappe.get_list(
         "POS Opening Entry",
         filters={
             "user": user,
+            "company": company,
             "docstatus": 1,
             "status": "Open",
         },
@@ -1284,6 +1136,7 @@ def get_pos_opening_screen_data() -> dict:
             "status",
         ],
         order_by="period_start_date desc",
+        limit_page_length=0,
     )
 
     # Currency information for display.
@@ -1296,6 +1149,8 @@ def get_pos_opening_screen_data() -> dict:
             currency_symbol = frappe.db.get_value(
                 "Currency", company_currency, "symbol"
             )
+        except frappe.PermissionError:
+            raise
         except Exception:
             company_currency = None
             currency_symbol = None
@@ -1303,6 +1158,8 @@ def get_pos_opening_screen_data() -> dict:
     user_full_name = None
     try:
         user_full_name = frappe.db.get_value("User", user, "full_name")
+    except frappe.PermissionError:
+        raise
     except Exception:
         user_full_name = None
 
@@ -1605,3 +1462,96 @@ def merge_bills(primary_invoice, secondary_invoice):
             "status": "error",
             "message": str(e),
         }
+
+def _require_ury_profile_access(pos_profile):
+    """Require document access and assignment to an enabled profile."""
+    profile = frappe.get_doc("POS Profile", pos_profile)
+    profile.check_permission("read")
+    frappe.get_doc("Company", profile.company).check_permission("read")
+
+    if profile.disabled:
+        frappe.throw(_("Selected POS Profile is disabled."))
+
+    users = {
+        row.user for row in profile.get("applicable_for_users") or []
+        if row.user
+    }
+    if users and frappe.session.user not in users:
+        frappe.throw(
+            _("You are not assigned to this POS Profile."),
+            frappe.PermissionError,
+        )
+    return profile
+
+def _get_permitted_order_list(status, limit, limit_start, cashier=None, enrich=False):
+    """List readable orders in the session branch, with bounded pagination."""
+    frappe.has_permission("POS Invoice", "read", throw=True)
+
+    page_size = int(limit)
+    offset = int(limit_start)
+    if not 1 <= page_size <= 100 or offset < 0:
+        frappe.throw(_("Invalid pagination: limit must be 1–100 and offset non-negative."))
+
+    branch = getBranch()
+    filters = {
+        "branch": branch,
+        "status": "Paid" if status == "Recently Paid" else status,
+    }
+    if cashier is not None:
+        filters["cashier"] = cashier
+
+    if status == "Unbilled":
+        filters.update({
+            "status": "Draft",
+            "invoice_printed": 0,
+            "restaurant_table": ["is", "set"],
+        })
+
+    if status == "Draft":
+        # Preserve: printed orders OR unprinted orders without a table.
+        # Both candidate queries enforce the current user's permissions.
+        printed = frappe.get_list(
+            "POS Invoice",
+            filters={**filters, "invoice_printed": 1},
+            fields=["name"],
+            limit_page_length=0,
+        )
+        without_table = frappe.get_list(
+            "POS Invoice",
+            filters={
+                **filters,
+                "invoice_printed": 0,
+                "restaurant_table": ["is", "not set"],
+            },
+            fields=["name"],
+            limit_page_length=0,
+        )
+        names = list({row.name for row in printed + without_table})
+        if not names:
+            return {"data": [], "next": False}
+        filters["name"] = ["in", names]
+
+    fields = [
+        "name", "invoice_printed", "grand_total", "restaurant_table",
+        "custom_merged_tables", "cashier", "waiter", "net_total",
+        "posting_time", "total_taxes_and_charges", "customer", "status",
+        "mobile_number", "posting_date", "rounded_total", "order_type",
+        "additional_discount_percentage", "discount_amount",
+        "custom_split_group", "custom_split_from",
+        "custom_merged_pos_invoice", "custom_merged_total",
+    ]
+    rows = frappe.get_list(
+        "POS Invoice",
+        filters=filters,
+        fields=fields,
+        order_by="modified desc, name desc",
+        limit_start=offset,
+        limit_page_length=page_size + 1,
+    )
+
+    has_next = len(rows) > page_size
+    rows = rows[:page_size]
+    if enrich:
+        rows = _enrich_split_group_meta(rows)
+
+    return {"data": rows, "next": has_next}

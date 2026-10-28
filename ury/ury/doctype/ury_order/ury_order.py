@@ -1995,10 +1995,26 @@ def _validate_additional_discount(additional_discount, pos_profile):
 # Method for URY POS
 @frappe.whitelist()
 def make_invoice(customer, payments, cashier, pos_profile,owner, additionalDiscount=None, table=None, invoice=None):
+    original_order = _validate_payment_order_access(invoice, pos_profile)
+    original_order_name = original_order.name
+
+    # Authorize the linked bill before the resolver can mutate anything.
+    merged_name = original_order.get("custom_merged_pos_invoice")
+    if merged_name:
+        if merged_name == original_order_name:
+            frappe.throw(_("An order cannot be merged with itself."))
+        _validate_payment_order_access(merged_name, pos_profile)
+
     additionalDiscount = _validate_additional_discount(additionalDiscount, pos_profile)
 
     order_type =  invoice_name = frappe.get_value("POS Invoice",invoice , "order_type")
     invoice = get_order_invoice(table, invoice, order_type, "Payments")
+    if invoice.is_new() or invoice.name != original_order_name:
+        frappe.throw(_("The selected order could not be resolved for payment."))
+
+    # Do not allow resolution to switch the linked payment target.
+    if invoice.get("custom_merged_pos_invoice") != merged_name:
+        frappe.throw(_("The merged order changed. Reload before paying."))
 
     if table:
         restaurant = get_restaurant_and_menu_name(table)
@@ -2030,7 +2046,9 @@ def make_invoice(customer, payments, cashier, pos_profile,owner, additionalDisco
     invoice.set("payments", [])
 
     if invoice.custom_merged_pos_invoice:
-        target = frappe.get_doc("POS Invoice", invoice.custom_merged_pos_invoice)
+        target = _validate_payment_order_access(
+            invoice.custom_merged_pos_invoice, pos_profile
+        )
         target.calculate_taxes_and_totals()
         
         doc_req = invoice.rounded_total
@@ -2058,7 +2076,7 @@ def make_invoice(customer, payments, cashier, pos_profile,owner, additionalDisco
         
         frappe.flags.in_bill_merge_sync = True
         try:
-            target.save(ignore_permissions=True)
+            target.save()
         finally:
             frappe.flags.in_bill_merge_sync = False
             
@@ -2171,3 +2189,40 @@ def change_table_in_kot(invoice, new_table, branch):
         production = frappe.db.get_value("URY KOT", kot.name, "production")
         kot_channel = "{}_{}_{}".format("kot_update", branch, production)
         frappe.publish_realtime(kot_channel)
+
+def _validate_payment_order_access(invoice_name, pos_profile):
+    """Authorize an existing order before payment resolution changes it."""
+    from ury.ury_pos.api import _require_ury_profile_access
+
+    profile = _require_ury_profile_access(pos_profile)
+    if not invoice_name:
+        frappe.throw(_("An existing order is required for payment."))
+
+    invoice = frappe.get_doc("POS Invoice", invoice_name)
+    invoice.check_permission("read")
+    invoice.check_permission("write")
+    invoice.check_permission("submit")
+
+    if invoice.company != profile.company or invoice.pos_profile != profile.name:
+        frappe.throw(
+            _("The order company and POS Profile must match the selected profile."),
+            frappe.PermissionError,
+        )
+
+    branch = getBranch()
+    if not branch or invoice.branch != branch or profile.branch != branch:
+        frappe.throw(
+            _("Not permitted to settle orders outside your active branch."),
+            frappe.PermissionError,
+        )
+
+    _enforce_order_access(
+        invoice,
+        require_modify=True,
+        deny_message=_("Not permitted to settle this order."),
+    )
+
+    if invoice.docstatus != 0:
+        frappe.throw(_("Only an existing draft order can be settled."))
+
+    return invoice
