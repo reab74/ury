@@ -1332,137 +1332,53 @@ def submit_checklist(pos_profile, checklist_type, items, pos_opening_entry=None)
 @frappe.whitelist()
 
 def merge_bills(primary_invoice, secondary_invoice):
-
+    from ury.ury.doctype.ury_order.ury_order import (
+        _validate_payment_order_access, _merged_payable_total,
+    )
+    if primary_invoice == secondary_invoice:
+        frappe.throw("Cannot merge an invoice with itself.")
+    initial = frappe.get_doc("POS Invoice", primary_invoice)
+    initial.check_permission("read")
+    profile = initial.pos_profile
+    for name in [primary_invoice, secondary_invoice]:
+        _validate_payment_order_access(name, profile)
+    for name in sorted([primary_invoice, secondary_invoice]):
+        frappe.db.sql("SELECT name FROM `tabPOS Invoice` WHERE name=%s FOR UPDATE", (name,))
+    docs = [_validate_payment_order_access(name, profile)
+            for name in [primary_invoice, secondary_invoice]]
+    if docs[0].currency != docs[1].currency:
+        frappe.throw("Cannot merge bills with different currencies.")
+    for doc in docs:
+        if doc.custom_merged_pos_invoice or doc.is_return or not doc.items:
+            frappe.throw("Select two non-empty, unmerged draft sales bills.")
+    incoming = frappe.db.exists("POS Invoice", {
+        "custom_merged_pos_invoice": ["in", [primary_invoice, secondary_invoice]],
+        "docstatus": ["<", 2],
+    })
+    if incoming:
+        frappe.throw("An existing bill already links to one of these orders.")
+    previous_flag = getattr(frappe.flags, "in_bill_merge_sync", False)
+    frappe.db.savepoint("ury_merge_bills")
+    frappe.flags.in_bill_merge_sync = True
     try:
-
-        if primary_invoice == secondary_invoice:
-            frappe.throw("Cannot merge an invoice with itself.")
-
-        primary_doc = frappe.get_doc("POS Invoice", primary_invoice)
-        secondary_doc = frappe.get_doc("POS Invoice", secondary_invoice)
-
-        # Authorization: caller must have write permission on both invoices
-        if not frappe.has_permission("POS Invoice", "write", doc=primary_doc):
-            frappe.throw(
-                "You do not have permission to merge this bill.",
-                frappe.PermissionError,
-            )
-
-        if not frappe.has_permission("POS Invoice", "write", doc=secondary_doc):
-            frappe.throw(
-                "You do not have permission to merge the selected bill.",
-                frappe.PermissionError,
-            )
-
-          # Prevent cross-branch merging
-        if primary_doc.branch != secondary_doc.branch:
-            frappe.throw(
-                "Cannot merge bills from different branches.",
-                frappe.PermissionError,
-            )
-
-        # Validation
-        if (primary_doc.docstatus != 0 or secondary_doc.docstatus != 0):
-            frappe.throw("Both invoices must be in Draft state to merge.")
-
-        if primary_doc.branch != secondary_doc.branch:
-            frappe.throw("Cannot merge bills from different branches.")
-
-        if primary_doc.custom_merged_pos_invoice:
-            frappe.throw("This bill already includes a merged bill.")
-
-        if secondary_doc.custom_merged_pos_invoice:
-            frappe.throw("The selected bill already includes another bill.")
-
-        if not secondary_doc.items:
-            frappe.throw("The selected bill has no items to merge.")
-
-
-        def update_merge_details(target_invoice,source_invoice,):
-
-            doc = frappe.get_doc("POS Invoice",target_invoice,)
-
-            # clear old rows
-            doc.set("custom_merged_pos_invoice_details",[],)
-
-            # only linked invoice items
-            for item in source_invoice.items:
-
-                doc.append(
-                    "custom_merged_pos_invoice_details",
-                    {
-                        "item_code": item.item_code,
-                        "item_name": item.item_name,
-                        "qty": item.qty,
-                        "rate": item.rate,
-                        "amount": item.amount,
-                    },
-                )
-
-            doc.custom_merged_total = source_invoice.rounded_total
-
-            doc.flags.ignore_version = True
-
-            doc.save(
-                ignore_version=True,
-            )
-
-
-        # Update merge references directly
-        frappe.db.set_value(
-            "POS Invoice",
-            primary_doc.name,
-            "custom_merged_pos_invoice",
-            secondary_doc.name,
-            update_modified=False,
-        )
-
-        frappe.db.set_value(
-            "POS Invoice",
-            secondary_doc.name,
-            "custom_merged_pos_invoice",
-            primary_doc.name,
-            update_modified=False,
-        )
-
-
-        # Build detail table
-        update_merge_details(primary_doc.name,secondary_doc,)
-
-        update_merge_details(secondary_doc.name,primary_doc,)
-
-
-        frappe.db.commit()
-
-
-        return {
-            "status": "success",
-            "message": "Bills merged successfully",
-            "name": primary_doc.name,
-        }
-
-
-    except frappe.PermissionError:
-
-        frappe.db.rollback()
-
+        for doc in docs:
+            doc.calculate_taxes_and_totals()
+        for doc, source in [(docs[0], docs[1]), (docs[1], docs[0])]:
+            doc.custom_merged_pos_invoice = source.name
+            doc.custom_merged_total = float(_merged_payable_total(source))
+            doc.set("custom_merged_pos_invoice_details", [])
+            for item in source.items:
+                doc.append("custom_merged_pos_invoice_details", {
+                    "item_code": item.item_code, "item_name": item.item_name,
+                    "qty": item.qty, "rate": item.rate, "amount": item.amount,
+                })
+            doc.save()
+    except Exception:
+        frappe.db.rollback(save_point="ury_merge_bills")
         raise
-
-
-    except Exception as e:
-
-        frappe.db.rollback()
-
-        frappe.log_error(
-            title="Bill Merge Error",
-            message=frappe.get_traceback(),
-        )
-
-        return {
-            "status": "error",
-            "message": str(e),
-        }
-
+    finally:
+        frappe.flags.in_bill_merge_sync = previous_flag
+    return {"status": "success", "message": "Bills merged successfully", "name": primary_invoice}
 def _require_ury_profile_access(pos_profile):
     """Require document access and assignment to an enabled profile."""
     profile = frappe.get_doc("POS Profile", pos_profile)

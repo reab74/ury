@@ -290,7 +290,7 @@ export function getCombinedOrderTotals(
   const grandTotal = Number(order.grand_total) + mergedTotal;
   const roundedTotal = disableRoundedTotal
     ? grandTotal
-    : Number(order.rounded_total) + Math.round(mergedTotal);
+    : Number(order.rounded_total) + mergedTotal;
 
   return { grandTotal, roundedTotal };
 }

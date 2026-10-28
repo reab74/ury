@@ -365,7 +365,7 @@ TABLE_RELEASE_FIELDS = {
 }
 
 
-def release_merge_cluster_tables(table_or_tables):
+def release_merge_cluster_tables(table_or_tables, commit=True):
 
     if isinstance(table_or_tables, (list, tuple, set)):
         cluster = list(table_or_tables)
@@ -380,7 +380,8 @@ def release_merge_cluster_tables(table_or_tables):
             update_modified=False,
         )
 
-    frappe.db.commit()
+    if commit:
+        frappe.db.commit()
 
 @frappe.whitelist()
 def release_tables_after_print(invoice):
@@ -508,6 +509,7 @@ def _has_open_pos_invoices_for_tables(tables):
 def _free_tables_if_no_open_invoices(
     restaurant_table,
     custom_merged_tables=None,
+    commit=True,
 ):
 
     if not restaurant_table:
@@ -521,7 +523,7 @@ def _free_tables_if_no_open_invoices(
     if _has_open_pos_invoices_for_cluster(tables):
         return
 
-    release_merge_cluster_tables(tables)
+    release_merge_cluster_tables(tables, commit=commit)
 
 
 def _copy_invoice_item_fields(item_row, qty):
@@ -1997,13 +1999,10 @@ def _validate_additional_discount(additional_discount, pos_profile):
 def make_invoice(customer, payments, cashier, pos_profile,owner, additionalDiscount=None, table=None, invoice=None):
     original_order = _validate_payment_order_access(invoice, pos_profile)
     original_order_name = original_order.name
-
-    # Authorize the linked bill before the resolver can mutate anything.
-    merged_name = original_order.get("custom_merged_pos_invoice")
-    if merged_name:
-        if merged_name == original_order_name:
-            frappe.throw(_("An order cannot be merged with itself."))
-        _validate_payment_order_access(merged_name, pos_profile)
+    if original_order.get("custom_merged_pos_invoice"):
+        return _settle_merged_payment(
+            original_order, payments, pos_profile, customer, additionalDiscount, table
+        )
 
     additionalDiscount = _validate_additional_discount(additionalDiscount, pos_profile)
 
@@ -2013,11 +2012,11 @@ def make_invoice(customer, payments, cashier, pos_profile,owner, additionalDisco
         frappe.throw(_("The selected order could not be resolved for payment."))
 
     # Do not allow resolution to switch the linked payment target.
-    if invoice.get("custom_merged_pos_invoice") != merged_name:
+    if invoice.get("custom_merged_pos_invoice"):
         frappe.throw(_("The merged order changed. Reload before paying."))
 
     if table:
-        restaurant = get_restaurant_and_menu_name(table)
+        _, _, restaurant = get_restaurant_and_menu_name(table)
         invoice.restaurant = restaurant
 
     invoice.customer = customer
@@ -2045,47 +2044,10 @@ def make_invoice(customer, payments, cashier, pos_profile,owner, additionalDisco
 
     invoice.set("payments", [])
 
-    if invoice.custom_merged_pos_invoice:
-        target = _validate_payment_order_access(
-            invoice.custom_merged_pos_invoice, pos_profile
+    for d in payments:
+        invoice.append(
+            "payments", dict(mode_of_payment=d["mode_of_payment"], amount=d["amount"])
         )
-        target.calculate_taxes_and_totals()
-        
-        doc_req = invoice.rounded_total
-        target_req = target.rounded_total
-        
-        target.set("payments", [])
-        
-        for d in payments:
-            amt = float(d["amount"])
-            mode = d["mode_of_payment"]
-            
-            if doc_req > 0:
-                give = min(amt, doc_req)
-                invoice.append("payments", dict(mode_of_payment=mode, amount=give))
-                amt -= give
-                doc_req -= give
-                
-            if target_req > 0 and amt > 0:
-                give = min(amt, target_req)
-                target.append("payments", dict(mode_of_payment=mode, amount=give))
-                amt -= give
-                target_req -= give
-                
-        target.flags.ignore_payment_sync = True
-        
-        frappe.flags.in_bill_merge_sync = True
-        try:
-            target.save()
-        finally:
-            frappe.flags.in_bill_merge_sync = False
-            
-        invoice.flags.ignore_payment_sync = True
-    else:
-        for d in payments:
-            invoice.append(
-                "payments", dict(mode_of_payment=d["mode_of_payment"], amount=d["amount"])
-            )
 
     # invoice.owner = owner
     invoice.save()
@@ -2226,3 +2188,112 @@ def _validate_payment_order_access(invoice_name, pos_profile):
         frappe.throw(_("Only an existing draft order can be settled."))
 
     return invoice
+
+
+def _merged_payable_total(doc):
+    from decimal import Decimal
+
+    field = "grand_total" if doc.is_rounded_total_disabled() else "rounded_total"
+    value = Decimal(str(doc.get(field) or 0))
+    if not value.is_finite() or value <= 0:
+        frappe.throw(_("Merged payment requires positive invoice totals."))
+    return value
+
+
+def _allocate_merged_tender(payments, totals, allowed_modes, precision):
+    """Pure allocation: preserve every tender amount; reject unsupported excess."""
+    from decimal import Decimal, InvalidOperation
+
+    unit = Decimal(1).scaleb(-precision)
+    rows = []
+    for row in payments:
+        if not isinstance(row, dict) or row.get("mode_of_payment") not in allowed_modes:
+            frappe.throw(_("Select a payment mode configured on this POS Profile."))
+        try:
+            amount = Decimal(str(row.get("amount")))
+            valid = amount.is_finite() and amount >= 0 and amount == amount.quantize(unit)
+        except (InvalidOperation, ValueError, TypeError):
+            valid = False
+        if not valid:
+            frappe.throw(_("Payment amounts must be finite, non-negative currency amounts."))
+        if amount:
+            rows.append((row["mode_of_payment"], amount))
+    if sum((amount for _, amount in rows), Decimal(0)) != sum(totals, Decimal(0)):
+        frappe.throw(_("Enter the exact combined bill total. Merged change and partial payment are not supported yet."))
+    allocated = [[], []]
+    remaining = list(totals)
+    for mode, amount in rows:
+        for index in range(2):
+            give = min(amount, remaining[index])
+            if give:
+                allocated[index].append({"mode_of_payment": mode, "amount": float(give)})
+                amount -= give
+                remaining[index] -= give
+    return allocated
+
+
+def _settle_merged_payment(original, payments, pos_profile, customer, discount, table):
+    """Submit the authorized pair in one transaction, without recursive sync."""
+    import json
+
+    partner = original.get("custom_merged_pos_invoice")
+    if not partner or partner == original.name:
+        frappe.throw(_("Invalid merged bill link."))
+    _validate_payment_order_access(partner, pos_profile)
+    # Serialize settlement of either side of the same pair.
+    for name in sorted([original.name, partner]):
+        frappe.db.sql("SELECT name FROM `tabPOS Invoice` WHERE name=%s FOR UPDATE", (name,))
+    first = _validate_payment_order_access(original.name, pos_profile)
+    second = _validate_payment_order_access(partner, pos_profile)
+    if first.custom_merged_pos_invoice != second.name or second.custom_merged_pos_invoice != first.name:
+        frappe.throw(_("Merged links changed. Reload the orders before paying."))
+    if first.currency != second.currency:
+        frappe.throw(_("Merged bills must use the same currency."))
+    if customer != first.customer:
+        frappe.throw(_("Change the customer on the order before making a merged payment."))
+    if table and table != first.restaurant_table:
+        frappe.throw(_("The selected table does not match this order."))
+    if discount not in (None, "", 0, 0.0, "0"):
+        frappe.throw(_("Payment-dialog discounts are not supported for merged bills yet."))
+    if isinstance(payments, str):
+        payments = json.loads(payments)
+    if not isinstance(payments, list):
+        frappe.throw(_("Payments must be a list."))
+    profile = frappe.get_doc("POS Profile", pos_profile)
+    allowed_modes = {row.mode_of_payment for row in profile.payments}
+    docs = [first, second]
+    for doc in docs:
+        if doc.is_return:
+            frappe.throw(_("Returns cannot be settled as merged bills."))
+        if doc.restaurant_table and not doc.invoice_printed:
+            frappe.throw(_("Print both bills before settling the merged payment."))
+        doc.calculate_taxes_and_totals()
+    totals = [_merged_payable_total(doc) for doc in docs]
+    precision = first.precision("paid_amount")
+    if precision != second.precision("paid_amount"):
+        frappe.throw(_("Merged bills must use the same payment precision."))
+    allocations = _allocate_merged_tender(payments, totals, allowed_modes, precision)
+    previous_flag = getattr(frappe.flags, "ury_merged_settlement", False)
+    frappe.db.savepoint("ury_merged_payment")
+    frappe.flags.ury_merged_settlement = True
+    try:
+        for doc, rows in zip(docs, allocations):
+            doc.set("payments", rows)
+            doc.save()
+        # Saving may recalculate totals. Never settle a stale allocation.
+        if [_merged_payable_total(doc) for doc in docs] != totals:
+            frappe.throw(_("Bill totals changed. Reload before paying."))
+        for doc in docs:
+            doc.submit()
+            if doc.docstatus != 1 or abs(doc.outstanding_amount or 0) > 0.000001:
+                frappe.throw(_("Both merged bills must be fully paid and submitted."))
+        for doc in docs:
+            _free_tables_if_no_open_invoices(
+                doc.restaurant_table, doc.custom_merged_tables, commit=False
+            )
+    except Exception:
+        frappe.db.rollback(save_point="ury_merged_payment")
+        raise
+    finally:
+        frappe.flags.ury_merged_settlement = previous_flag
+    return {"status": "success", "invoices": [doc.name for doc in docs]}

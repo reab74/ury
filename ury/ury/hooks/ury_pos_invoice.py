@@ -227,69 +227,35 @@ def restrict_existing_order(doc, event):
         )
 
 def sync_merged_invoice(doc):
-    if getattr(frappe.flags, "in_bill_merge_sync", False):
+    if (getattr(frappe.flags, "in_bill_merge_sync", False)
+            or getattr(frappe.flags, "ury_merged_settlement", False)):
         return
-
-    linked_invoice = doc.custom_merged_pos_invoice
-    if not linked_invoice:
+    if not doc.custom_merged_pos_invoice:
         return
-
+    # Financial allocation/submission belongs to the atomic payment endpoint.
+    if doc.docstatus == 1:
+        frappe.throw("Settle merged bills through the URY payment screen.")
+    target = frappe.get_doc("POS Invoice", doc.custom_merged_pos_invoice)
+    target.check_permission("read")
+    target.check_permission("write")
+    if (target.name == doc.name or target.company != doc.company
+            or target.pos_profile != doc.pos_profile or target.branch != doc.branch
+            or target.custom_merged_pos_invoice != doc.name or target.docstatus != 0):
+        frappe.throw("Invalid merged bill relationship. Reload the orders.")
+    previous_flag = getattr(frappe.flags, "in_bill_merge_sync", False)
     frappe.flags.in_bill_merge_sync = True
-
     try:
-        if not frappe.db.exists("POS Invoice", linked_invoice):
-            return
-
-        target = frappe.get_doc("POS Invoice", linked_invoice)
-
-        # sync invoice printed
+        from ury.ury.doctype.ury_order.ury_order import _merged_payable_total
         target.invoice_printed = doc.invoice_printed
-
-        # sync payment
-        if doc.paid_amount > 0 and not getattr(doc.flags, "ignore_payment_sync", False):
-
-            target.set("payments", [])
-
-            for p in doc.payments:
-                target.append("payments", {
-                    "mode_of_payment": p.mode_of_payment,
-                    "amount": target.rounded_total,
-                    "base_amount": target.rounded_total,
-                    "account": getattr(p, "account", None)
-                })
-
-            target.paid_amount = target.rounded_total
-
-        # sync submit/payment status
-        if doc.docstatus == 1 and target.docstatus == 0:
-
-            target.flags.ignore_validate_update_after_submit = True
-
-            if target.docstatus == 0:
-                target.save(ignore_permissions=True)
-                target.submit()
-
-        else:
-            target.save(ignore_permissions=True)
-
-        frappe.publish_realtime(
-            "pos_invoice_updated",
-            {
-                "name": target.name,
-                "docstatus": target.docstatus,
-                "paid_amount": target.paid_amount,
-                "invoice_printed": target.invoice_printed
-            }
+        target.custom_merged_total = float(_merged_payable_total(doc))
+        target.save()
+        doc.custom_merged_total = float(_merged_payable_total(target))
+        frappe.db.set_value(
+            "POS Invoice", doc.name, "custom_merged_total",
+            doc.custom_merged_total, update_modified=False,
         )
-
-    except Exception:
-        frappe.log_error(
-            frappe.get_traceback(),
-            "Merged Invoice Sync Failed"
-        )
-
     finally:
-        frappe.flags.in_bill_merge_sync = False
+        frappe.flags.in_bill_merge_sync = previous_flag
 
 
 def on_update(doc, method):
@@ -301,35 +267,11 @@ def on_submit(doc, method):
     release_merged_tables(doc)
 
 def release_merged_tables(doc):
+    if getattr(frappe.flags, "ury_merged_settlement", False):
+        return
+    from ury.ury.doctype.ury_order.ury_order import _free_tables_if_no_open_invoices
 
-    invoices = [doc]
-
-    if doc.custom_merged_pos_invoice:
-        try:
-            invoices.append(
-                frappe.get_doc(
-                    "POS Invoice",
-                    doc.custom_merged_pos_invoice
-                )
-            )
-        except Exception:
-            pass
-
-    for invoice in invoices:
-
-        # only release dine in tables
-        if invoice.order_type != "Dine In":
-            continue
-
-        if not invoice.restaurant_table:
-            continue
-
-        frappe.db.set_value(
-            "URY Table",
-            invoice.restaurant_table,
-            {
-                "occupied": 0,
-                "latest_invoice_time": None,
-            },
-            update_modified=False,
+    if doc.order_type == "Dine In" and doc.restaurant_table:
+        _free_tables_if_no_open_invoices(
+            doc.restaurant_table, doc.custom_merged_tables, commit=False
         )

@@ -126,6 +126,10 @@ def select_network_printer(pos_profile, invoice_id):
 
 @frappe.whitelist()
 def qz_print_update(invoice):
+    merged_result = _mark_merged_bill_printed(invoice)
+    if merged_result is not None:
+        return merged_result
+
     try:
         invoice_doc = frappe.get_doc("POS Invoice", invoice)
         if not frappe.has_permission("POS Invoice", "write", doc=invoice_doc):
@@ -257,3 +261,57 @@ def signature_promise(toSign=None):
     )
 
     return base64.b64encode(signature).decode("ascii")
+
+
+def _mark_merged_bill_printed(invoice):
+    from ury.ury_pos.api import getBranch
+    from ury.ury.doctype.ury_order.ury_order import _enforce_order_access
+
+    primary = frappe.get_doc("POS Invoice", invoice)
+    primary.check_permission("read")
+    primary.check_permission("write")
+
+    linked = primary.get("custom_merged_pos_invoice")
+    if not linked:
+        return None
+    if linked == primary.name:
+        frappe.throw(_("Invalid merged bill relationship."))
+
+    secondary = frappe.get_doc("POS Invoice", linked)
+    secondary.check_permission("read")
+    secondary.check_permission("write")
+
+    if (
+        secondary.custom_merged_pos_invoice != primary.name
+        or primary.company != secondary.company
+        or primary.pos_profile != secondary.pos_profile
+        or primary.branch != secondary.branch
+        or primary.currency != secondary.currency
+        or primary.docstatus != secondary.docstatus
+        or primary.docstatus not in (0, 1)
+    ):
+        frappe.throw(_("Invalid merged bill relationship."))
+
+    branch = getBranch()
+    if not branch or primary.branch != branch:
+        frappe.throw(
+            _("Not permitted to print bills outside your active branch."),
+            frappe.PermissionError,
+        )
+
+    # Authorize both before writing either print flag.
+    for doc in (primary, secondary):
+        validate_print_permission(doc)
+        _enforce_order_access(doc)
+
+    frappe.db.savepoint("ury_merged_print")
+    try:
+        for doc in (primary, secondary):
+            frappe.db.set_value(
+                "POS Invoice", doc.name, "invoice_printed", 1
+            )
+    except Exception:
+        frappe.db.rollback(save_point="ury_merged_print")
+        raise
+
+    return {"status": "Success"}

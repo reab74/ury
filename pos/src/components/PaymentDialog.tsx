@@ -20,6 +20,7 @@ interface PaymentDialogProps {
   owner: string;
   fetchOrders: () => Promise<void>;
   clearSelectedOrder: () => void;
+  isMerged?: boolean;
   discountPercentage?: number;
   discountAmount?: number;
 }
@@ -37,6 +38,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   owner,
   fetchOrders,
   clearSelectedOrder,
+  isMerged = false,
   discountPercentage,
   discountAmount
 }) => {
@@ -61,7 +63,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   }, [fetchPaymentModes]);
 
   // baseTotal represents the amount before any invoice-level discount (like pricing rule or manual discount)
-  const baseTotal = grandTotal + (discountAmount || 0);
+  const baseTotal = isMerged ? roundedTotal : grandTotal + (discountAmount || 0);
 
   const handleApplyDiscount = () => {
     const value = parseFloat(discountValue);
@@ -83,12 +85,14 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
   const adjustment = roundedTotal - grandTotal;
   const roundedAdjustment = Math.round(adjustment * 100) / 100;
   const showAdjustment = Math.abs(roundedAdjustment) > 0.001;
-  const totalDiscount = appliedDiscount;
+  const totalDiscount = isMerged ? 0 : appliedDiscount;
   const discountedTotal = Math.max(0, subtotal - totalDiscount);
   // If discount is applied, round up; else, round normally
   const roundingDisabled =
     Number(storePosProfile?.disable_rounded_total) === 1;
-  const finalTotal = roundingDisabled
+  const finalTotal = isMerged
+    ? Number(roundedTotal.toFixed(2))
+    : roundingDisabled
     ? Number(discountedTotal.toFixed(2))
     : (appliedDiscount > 0 ? Math.ceil(discountedTotal) : Math.round(discountedTotal));
 
@@ -145,8 +149,12 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
     setIsProcessing(true);
     setError(null);
     try {
+      if (isMerged && Math.abs(paymentsTotal - finalTotal) > 0.000001) {
+        setError('Enter the exact combined total. Change is not supported for merged bills yet.');
+        return;
+      }
       await call.post('ury.ury.doctype.ury_order.ury_order.make_invoice', {
-        additionalDiscount: appliedDiscount > 0 ? appliedDiscount : null,
+        additionalDiscount: isMerged ? null : (appliedDiscount > 0 ? appliedDiscount : null),
         cashier,
         customer,
         invoice,
@@ -186,7 +194,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
           </div>
 
           {/* Discount Section (conditional) */}
-          {storePosProfile?.enable_discount === 1 && (
+          {!isMerged && storePosProfile?.enable_discount === 1 && (
             <div className="space-y-4 mb-6">
               <h3 className="text-lg font-semibold flex items-center gap-2">
                 <Percent className="w-5 h-5" />
@@ -210,6 +218,12 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
                 </Button>
               </div>
             </div>
+          )}
+
+          {isMerged && (
+            <p className="mb-4 text-sm text-amber-700">
+              Enter the exact combined total. Merged change and payment-dialog discounts are not supported yet.
+            </p>
           )}
 
           {/* Payment Methods Section - Split Payment */}
@@ -287,7 +301,7 @@ const PaymentDialog: React.FC<PaymentDialogProps> = ({
                 <span>{formatCurrency(subtotal)}</span>
               </div>
               {/* Discount */}
-              {appliedDiscount > 0 && (
+              {!isMerged && appliedDiscount > 0 && (
                 <div className="flex justify-between text-green-600">
                   <span>{t('payment.discount')}</span>
                   <span>-{formatCurrency(appliedDiscount)}</span>

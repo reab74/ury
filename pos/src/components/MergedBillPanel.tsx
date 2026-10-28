@@ -1,17 +1,21 @@
 import { useEffect, useState } from 'react';
 import { Link2 } from 'lucide-react';
 import { formatCurrency } from '@ury/core';
-import { getPOSInvoiceItems, type POSInvoice, type POSInvoiceItem } from '../lib/invoice-api';
+import { getCombinedOrderTotals, getPOSInvoiceItems, type POSInvoice, type POSInvoiceItem } from '../lib/invoice-api';
 import { t } from '../i18n';
 import { Spinner } from '@ury/ui';
 import { Button } from '@ury/ui';
+import { usePOSStore } from '../store/pos-store';
 
 interface MergedBillPanelProps {
-  order: Pick<POSInvoice, 'name' | 'custom_merged_pos_invoice' | 'custom_merged_total' | 'rounded_total'>;
+  order: Pick<POSInvoice, 'name' | 'custom_merged_pos_invoice' | 'custom_merged_total' | 'rounded_total' | 'grand_total'>;
   onOpenSecondary?: (invoiceName: string) => void;
 }
 
 const MergedBillPanel = ({ order, onOpenSecondary }: MergedBillPanelProps) => {
+  const roundingDisabled = usePOSStore(
+    (state) => Number(state.posProfile?.disable_rounded_total) === 1
+  );
   const secondaryName = order.custom_merged_pos_invoice;
   const [items, setItems] = useState<POSInvoiceItem[]>([]);
   const [loading, setLoading] = useState(false);
@@ -45,8 +49,9 @@ const MergedBillPanel = ({ order, onOpenSecondary }: MergedBillPanelProps) => {
     return null;
   }
 
-  const combinedTotal =
-    (order.rounded_total ?? 0) + (order.custom_merged_total ?? 0);
+  const combinedTotal = getCombinedOrderTotals(
+    order, roundingDisabled
+  ).roundedTotal;
 
   return (
     <div className="mb-6 rounded-lg border-2 border-primary-200 bg-primary-50/60 p-4">
@@ -71,7 +76,7 @@ const MergedBillPanel = ({ order, onOpenSecondary }: MergedBillPanelProps) => {
       <div className="mb-3 flex items-center justify-between rounded-md border border-gray-200 bg-white px-3 py-2 text-sm">
         <span className="font-medium text-gray-900">{secondaryName}</span>
         <span className="font-semibold text-gray-900 tabular-nums">
-          {formatCurrency(Math.round(order.custom_merged_total ?? 0))}
+          {formatCurrency(Number(order.custom_merged_total ?? 0))}
         </span>
       </div>
 

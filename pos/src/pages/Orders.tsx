@@ -770,6 +770,7 @@ export default function Orders() {
       </div>
       {showPaymentDialog && selectedOrder && (
         <PaymentDialog
+          isMerged={Boolean(selectedOrder.custom_merged_pos_invoice)}
           onClose={() => setShowPaymentDialog(false)}
           grandTotal={selectedOrderTotals.grandTotal}
           roundedTotal={selectedOrderTotals.roundedTotal}
