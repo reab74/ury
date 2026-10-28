@@ -1471,3 +1471,35 @@ def _get_permitted_order_list(status, limit, limit_start, cashier=None, enrich=F
         rows = _enrich_split_group_meta(rows)
 
     return {"data": rows, "next": has_next}
+
+@frappe.whitelist()
+def get_production_units_for_branch():
+    """Return readable KOT production-unit names in the session user's branch."""
+    if frappe.session.user == "Guest":
+        frappe.throw(_("Not permitted"), frappe.PermissionError)
+
+    branch = getBranch()
+
+    profiles = frappe.get_list(
+        "POS Profile",
+        filters={"branch": branch, "disabled": 0},
+        fields=["name"],
+        limit_page_length=0,
+    )
+    profile_names = [row.name for row in profiles]
+
+    if not profile_names:
+        return {"production_units": []}
+
+    units = frappe.get_list(
+        "URY Production Unit",
+        filters={
+            "branch": branch,
+            "pos_profile": ["in", profile_names],
+        },
+        fields=["name"],
+        order_by="name asc",
+        limit_page_length=0,
+    )
+
+    return {"production_units": [row.name for row in units]}
