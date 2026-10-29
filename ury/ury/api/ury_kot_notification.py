@@ -1,4 +1,6 @@
 import frappe
+from html import escape
+from ury.ury.api.kot_access import require_kot_access, can_read_kot
 from frappe.utils import add_to_date, now_datetime
 
 
@@ -10,62 +12,36 @@ def get_users_with_role(role_name):
     user_ids = [user["user"] for user in users_with_role]
     user_details = frappe.get_all(
         "User",
-        filters={"name": ("in", user_ids)},
+        filters={"name": ("in", user_ids), "enabled": 1, "user_type": "System User"},
         fields=["name", "full_name", "email"],
     )
 
     return user_details
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def order_delay_notification(id):
-    kot_doc = frappe.get_doc("URY KOT", id)
-    if not frappe.has_permission("URY KOT", "write", doc=kot_doc):
-        frappe.throw(frappe._("Not permitted to send notifications for this KOT"), frappe.PermissionError)
-
-    table = kot_doc.restaurant_table
-    tableOrTakeaway = "Take Away"
-    if table:
-        tableOrTakeaway = table
-    order_status = frappe.db.get_value("URY KOT", id, "order_status")
-    invoice_id = frappe.db.get_value("URY KOT", id, "invoice")
-    order_id = invoice_id[-5:]
-    kot_type = frappe.db.get_value("URY KOT", id, "type")
-    pos_profile = frappe.db.get_value("URY KOT", id, "pos_profile")
-    items = frappe.get_all(
-        "URY KOT Items",
-        fields=["item_name", "quantity"],
-        filters={"parent": id, "parenttype": "KOT"},
+    if frappe.request and frappe.request.method != "POST":
+        frappe.throw("POST requests only", frappe.PermissionError)
+    kot = require_kot_access(id, "write")
+    if kot.docstatus != 1 or kot.order_status != "Ready For Prepare":
+        return
+    subject = f"Order {kot.invoice} / {kot.name} Delayed"
+    message = (
+        "<ul><li><b>Table:</b> " + escape(kot.restaurant_table or "Take Away")
+        + "</li><li><b>Order Type:</b> " + escape(kot.type or "") + "</li></ul>"
+    )
+    roles = frappe.get_all(
+        "URY Notification Recipient", fields=["receiver_by_role"],
+        filters={"parent": kot.pos_profile, "parenttype": "POS Profile"},
         order_by="idx",
     )
-
-    subject = f"""Order # {order_id} Delayed"""
-
-    message = f"""
-            <ul>
-                <li><b> Table : </b> {tableOrTakeaway}</li>
-                <li><b> Order Type : </b> {kot_type}</li>
-                
-            
-            <ul>
-    """
-
-    message += """
-            </ul></li>
-            </ul>
-    """
-
-    receipients = frappe.get_all(
-        "URY Notification Recipient",
-        fields=["receiver_by_role"],
-        filters={"parent": pos_profile, "parenttype": "POS Profile"},
-        order_by="idx",
-    )
-    if order_status == "Ready For Prepare":
-        for receipient in receipients:
-            users = get_users_with_role(receipient.receiver_by_role)
-            for user in users:
+    notified = set()
+    for row in roles:
+        for user in get_users_with_role(row.receiver_by_role):
+            if user.name not in notified and can_read_kot(kot, user.name):
                 create_system_notification(message, user.name, subject)
+                notified.add(user.name)
 
 
 def create_system_notification(message, user, subject):

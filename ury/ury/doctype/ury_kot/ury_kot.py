@@ -6,6 +6,7 @@ import requests
 import json
 from frappe.utils.print_format import print_by_server
 from frappe.model.document import Document
+from ury.ury.api.kot_access import publish_kot_event
 
 
 class URYKOT(Document):
@@ -103,8 +104,8 @@ class URYKOT(Document):
         cache_key = "{}_{}_last_kot_time".format(currentBranch, production)
         time = frappe.cache().get_value(cache_key)
         kot_channel = "{}_{}_{}".format("kot_update", currentBranch, production)
-        frappe.publish_realtime(
-            kot_channel,
+        publish_kot_event(
+            self, kot_channel,
             {"kot": kotjson, "audio_file": audio_file, "last_kot_time": time},
         )
         frappe.cache().set_value(cache_key, self.time)

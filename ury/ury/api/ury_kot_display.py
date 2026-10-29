@@ -3,72 +3,47 @@ import frappe
 from ury.ury_pos.api import getBranch
 from frappe.utils import get_datetime
 from frappe import _
+from ury.ury.api.kot_access import require_kot_access, permitted_profiles
 
 # Function to set order status in a KOT document
 @frappe.whitelist(methods=["POST"])
 def serve_kot(name, time=None):
     if frappe.request and frappe.request.method != "POST":
         frappe.throw(_("POST requests only"), frappe.PermissionError)
-
-    kot_doc = frappe.get_doc("URY KOT", name)
-    if not frappe.has_permission("URY KOT", "write", doc=kot_doc):
-        frappe.throw(_("Not permitted to serve this KOT"), frappe.PermissionError)
-
+    kot = require_kot_access(name, "write")
+    if kot.docstatus != 1 or kot.type not in ("New Order", "Order Modified", "Duplicate"):
+        frappe.throw(_("Only submitted preparation tickets can be served."))
+    if kot.order_status == "Served":
+        return {"status": "Served"}
+    if kot.order_status != "Ready For Prepare":
+        frappe.throw(_("This kitchen order is not ready for preparation."))
     current_time = get_datetime()
-    creation_time = kot_doc.creation
-
-    production_time = current_time - creation_time
-    production_time_minutes = production_time.total_seconds() / 60
-    
-    server_time_str = current_time.strftime("%H:%M:%S")
-    
-    frappe.db.set_value("URY KOT", name, "start_time_serv", server_time_str)
-    frappe.db.set_value("URY KOT", name, "production_time", production_time_minutes)
-    frappe.db.set_value("URY KOT", name, "order_status", "Served")
+    minutes = max(0, (current_time - get_datetime(kot.creation)).total_seconds() / 60)
+    frappe.db.set_value("URY KOT", kot.name, {
+        "start_time_serv": current_time.strftime("%H:%M:%S"),
+        "production_time": minutes, "order_status": "Served",
+    })
+    return {"status": "Served"}
 
 
 # Function to mark it as verified in a cancel type KOT.
 # The verifying user is derived from the session and must hold a manager-level
 # role, so confirmation cannot be self-attributed or forged by the caller.
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def confirm_cancel_kot(name):
+    if frappe.request and frappe.request.method != "POST":
+        frappe.throw(_("POST requests only"), frappe.PermissionError)
     manager_roles = {"URY Manager", "URY Admin", "System Manager"}
-    if not manager_roles.intersection(frappe.get_roles()) and frappe.session.user != "Administrator":
-        frappe.throw(
-            "Only a manager can confirm a cancelled KOT.",
-            frappe.PermissionError,
-        )
-
-    # Fetch the KOT document
-    try:
-        kot_doc = frappe.get_doc("URY KOT", name)
-    except frappe.DoesNotExistError:
-        frappe.throw(f"URY KOT {name} not found.", frappe.DoesNotExistError)
-
-    # Document-level permission check
-    if not frappe.has_permission("URY KOT", "write", doc=kot_doc):
-        frappe.throw(
-            "You do not have permission to modify this KOT.",
-            frappe.PermissionError
-        )
-
-    # Branch-level permission check
-    try:
-        session_branch = getBranch()
-    except Exception:
-        if frappe.session.user == "Administrator" or "System Manager" in frappe.get_roles():
-            session_branch = None
-        else:
-            raise
-
-    if session_branch and kot_doc.branch != session_branch:
-        frappe.throw(
-            "You do not have permission to modify KOTs from other branches.",
-            frappe.PermissionError
-        )
-
-    frappe.db.set_value("URY KOT", name, "verified", 1)
-    frappe.db.set_value("URY KOT", name, "verified_by", frappe.session.user)
+    if frappe.session.user != "Administrator" and not manager_roles.intersection(frappe.get_roles()):
+        frappe.throw(_("Only a manager can confirm a cancelled KOT."), frappe.PermissionError)
+    kot = require_kot_access(name, "write")
+    if kot.docstatus != 1 or kot.type not in ("Cancelled", "Partially cancelled"):
+        frappe.throw(_("Only submitted cancellation tickets can be confirmed."))
+    if not kot.verified:
+        frappe.db.set_value("URY KOT", kot.name, {
+            "verified": 1, "verified_by": frappe.session.user,
+        })
+    return {"status": "Confirmed"}
 
 
 @frappe.whitelist(allow_guest=True)
@@ -106,138 +81,47 @@ def build_dashboard_summary(kot_list):
 
 @frappe.whitelist()
 def kot_list():
-    today = frappe.utils.now()
-    branch = getBranch()
-    kot_alert_time = frappe.db.get_value(
-        "POS Profile", {"branch": branch}, "custom_kot_warning_time"
-    )
-    daily_order_number = frappe.db.get_value(
-        "POS Profile", {"branch": branch}, "custom_reset_order_number_daily"
-    )
-    three_hours_ago = frappe.utils.add_to_date(today, hours=-3)
-    audio_alert = frappe.db.get_value(
-        "POS Profile", {"branch": branch}, "custom_kot_alert"
-    )
-    kotList = frappe.get_list(
-        "URY KOT",
-        fields=["name"],
-        filters={
-            "order_status": "Ready For Prepare",
-            "branch": branch,
-            "type": [
-                "in",
-                [
-                    "New Order",
-                    "Order Modified",
-                    "Duplicate",
-                    "Cancelled",
-                    "Partially cancelled",
-                ],
-            ],
-            "docstatus": 1,
-            "verified": 0,
-            "creation": (">=", three_hours_ago),
-        },
-        order_by="creation desc",
-    )
-    production_filters = {}
-    KOT = []
-    for kot in kotList:
-        kotdoc = frappe.get_doc("URY KOT", kot.name)
-        
-        if kotdoc.production:
-            if kotdoc.production not in production_filters:
-                prod_doc = frappe.get_doc("URY Production Unit", kotdoc.production)
-                if prod_doc.enable_order_type_wise_display_on_mosaic:
-                    production_filters[kotdoc.production] = [row.order_type for row in prod_doc.get("order_type", [])]
-                else:
-                    production_filters[kotdoc.production] = None
-            
-            allowed_order_types = production_filters[kotdoc.production]
-            if allowed_order_types is not None:
-                invoice_order_type = frappe.db.get_value("POS Invoice", kotdoc.invoice, "order_type")
-                if invoice_order_type not in allowed_order_types:
-                    continue
-
-        kotjson = json.loads(frappe.as_json(kotdoc))
-        KOT.append(kotjson)
-    dashboard = build_dashboard_summary(KOT)
-    return {
-        "KOT": KOT,
-        "Dashboard": dashboard,
-        "Branch": branch,
-        "kot_alert_time": kot_alert_time,
-        "audio_alert": audio_alert,
-        "daily_order_number":daily_order_number
-    }
+    result = _list_kots("Ready For Prepare")
+    result["Dashboard"] = build_dashboard_summary(result["KOT"])
+    return result
 
 @frappe.whitelist()
 def served_kot_list():
-    today = frappe.utils.now()
+    return _list_kots("Served")
+
+
+
+def _list_kots(status):
     branch = getBranch()
-    kot_alert_time = frappe.db.get_value(
-        "POS Profile", {"branch": branch}, "custom_kot_warning_time"
-    )
-    daily_order_number = frappe.db.get_value(
-        "POS Profile", {"branch": branch}, "custom_reset_order_number_daily"
-    )
-    three_hours_ago = frappe.utils.add_to_date(today, hours=-3)
-    audio_alert = frappe.db.get_value(
-        "POS Profile", {"branch": branch}, "custom_kot_alert"
-    )
-    kotList = frappe.get_list(
-        "URY KOT",
-        fields=["name"],
-        filters={
-            "order_status": "Served",
-            "branch": branch,
-            "type": [
-                "in",
-                [
-                    "New Order",
-                    "Order Modified",
-                    "Duplicate",
-                    "Cancelled",
-                    "Partially cancelled",
-                ],
-            ],
-            "docstatus": 1,
-            "verified": 0,
-            "creation": (">=", three_hours_ago),
-        },
-        order_by="creation desc",
-    )
-    production_filters = {}
-
-    print(kotList,"kotList..................")
-    KOT = []
-    for kot in kotList:
-        kotdoc = frappe.get_doc("URY KOT", kot.name)
-        print(kot.name,".................kotdoc")
-        
-        if kotdoc.production:
-            if kotdoc.production not in production_filters:
-                prod_doc = frappe.get_doc("URY Production Unit", kotdoc.production)
-                if prod_doc.enable_order_type_wise_display_on_mosaic:
-                    production_filters[kotdoc.production] = [row.order_type for row in prod_doc.get("order_type", [])]
-                else:
-                    production_filters[kotdoc.production] = None
-            
-            allowed_order_types = production_filters[kotdoc.production]
-            if allowed_order_types is not None:
-                invoice_order_type = frappe.db.get_value("POS Invoice", kotdoc.invoice, "order_type")
-                if invoice_order_type not in allowed_order_types:
-                    continue
-
-        invoice=frappe.db.get_value("URY KOT",kot.name,"invoice")
-        print(invoice,".....................invoice")
-        kotjson = json.loads(frappe.as_json(kotdoc))
-        KOT.append(kotjson)
-    return {
-        "KOT": KOT,
-        "Branch": branch,
-        "kot_alert_time": kot_alert_time,
-        "audio_alert": audio_alert,
-        "daily_order_number":daily_order_number
+    profiles = permitted_profiles(branch)
+    profile = profiles[0] if profiles else None
+    result = {
+        "KOT": [], "Branch": branch,
+        "kot_alert_time": profile.get("custom_kot_warning_time") if profile else None,
+        "audio_alert": profile.get("custom_kot_alert") if profile else 0,
+        "daily_order_number": profile.get("custom_reset_order_number_daily") if profile else 0,
     }
-
+    if not profiles:
+        return result
+    rows = frappe.get_list(
+        "URY KOT", fields=["name"],
+        filters={
+            "branch": branch, "pos_profile": ["in", [p.name for p in profiles]],
+            "order_status": status, "docstatus": 1, "verified": 0,
+            "type": ["in", ["New Order", "Order Modified", "Duplicate", "Cancelled", "Partially cancelled"]],
+            "creation": [">=", frappe.utils.add_to_date(frappe.utils.now(), hours=-3)],
+        }, order_by="creation desc, name desc", limit_page_length=0,
+    )
+    for row in rows:
+        try:
+            kot = require_kot_access(row.name)
+        except (frappe.PermissionError, frappe.DoesNotExistError):
+            continue
+        if kot.production:
+            unit = frappe.get_doc("URY Production Unit", kot.production)
+            if unit.enable_order_type_wise_display_on_mosaic:
+                order_type = frappe.db.get_value("POS Invoice", kot.invoice, "order_type")
+                if order_type not in [r.order_type for r in unit.get("order_type", [])]:
+                    continue
+        result["KOT"].append(json.loads(frappe.as_json(kot)))
+    return result

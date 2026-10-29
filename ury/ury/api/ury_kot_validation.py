@@ -4,6 +4,7 @@ import json
 from frappe import _
 from frappe.utils import get_datetime, datetime
 from ury.ury_pos.api import getBranch
+from ury.ury.api.kot_access import publish_kot_event, require_profile_access, require_kot_access
 
 
 SUPERVISOR_ROLES = {"URY Manager", "System Manager"}
@@ -148,8 +149,8 @@ def create_kot_log(kotdoc, invoice):
     # since that channel is already consumed by the existing KDS mosaic app with an
     # incompatible payload shape; reusing it would break that feature.
     kot_error_channel = "kot_error_{}_{}".format(posInvoice.branch, kotdoc.production)
-    frappe.publish_realtime(
-        kot_error_channel,
+    publish_kot_event(
+        kotdoc, kot_error_channel,
         {
             "kot": kotdoc.name,
             "invoice": posInvoice.name,
@@ -162,62 +163,20 @@ def create_kot_log(kotdoc, invoice):
 
 @frappe.whitelist()
 def get_kot_errors(pos_profile):
-    # Branch is resolved only from the session (getBranch()) — never accept a
-    # branch parameter from the caller. Supervisors may pass a pos_profile for
-    # a branch other than their own; everyone else is confined to their own
-    # branch's POS Profile.
-    session_user = frappe.session.user
-    is_supervisor = session_user == "Administrator" or bool(
-        set(frappe.get_roles(session_user)) & SUPERVISOR_ROLES
-    )
-
-    try:
-        session_branch = getBranch()
-    except Exception:
-        if is_supervisor:
-            session_branch = None
-        else:
-            raise
-
-    profile_branch = frappe.db.get_value("POS Profile", pos_profile, "branch")
-
-    if not profile_branch:
-        frappe.throw(
-            _("POS Profile {0} not found.").format(pos_profile),
-            frappe.DoesNotExistError,
-        )
-
-    if not is_supervisor:
-        if not session_branch or profile_branch != session_branch:
-            frappe.throw(
-                _("You do not have permission to access KOT errors for POS Profile {0}.").format(
-                    pos_profile
-                ),
-                frappe.PermissionError,
-            )
-        branch = session_branch
-    else:
-        # Supervisors are scoped to whichever branch the requested POS Profile
-        # belongs to (still not caller-supplied as a raw branch value).
-        branch = profile_branch
-
-    # Plain equality filter only — branch IS NULL rows are pre-migration
-    # legacy noise and must never be included, even for supervisors. Also
-    # scoped to the requested pos_profile so results don't leak other POS
-    # Profiles' errors at the same branch.
-    logs = frappe.get_all(
+    profile = require_profile_access(pos_profile)
+    logs = frappe.get_list(
         "URY KOT Error Log",
-        filters={"branch": branch, "pos_profile": pos_profile},
-        fields=[
-            "kot",
-            "invoice",
-            "invoice_creation_time",
-            "production",
-            "date",
-            "time",
-        ],
-        order_by="creation desc",
-        limit_page_length=50,
+        filters={"branch": profile.branch, "pos_profile": profile.name},
+        fields=["kot", "invoice", "invoice_creation_time", "production", "date", "time"],
+        order_by="creation desc", limit_page_length=50,
     )
-
-    return logs
+    permitted = []
+    for row in logs:
+        try:
+            kot = require_kot_access(row.kot)
+        except (frappe.PermissionError, frappe.DoesNotExistError):
+            continue
+        if (kot.pos_profile == profile.name and kot.invoice == row.invoice
+                and kot.production == row.production):
+            permitted.append(row)
+    return permitted
