@@ -1,4 +1,5 @@
 import React, { useEffect, useMemo, useRef } from 'react';
+import { getCartLineId } from '../lib/cart-line-identity';
 import { Clock, User, UserCheck, Receipt, Printer, Pencil, X, GitBranch, GitMerge } from 'lucide-react';
 import { Badge, Button, Card, CardContent } from '@ury/ui';
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, DialogFooter } from '@ury/ui';
@@ -222,12 +223,15 @@ export default function Orders() {
       // Build the cart items from the draft order
       const items = (order.items || []).map((item: any) => ({
         id: item.item_code,
+        custom_flora_arrangement: item.custom_flora_arrangement || undefined,
         name: item.item_name,
         price: item.rate,
         quantity: item.qty,
         amount: item.amount,
         image: item.image || null,
-        uniqueId: item.name,
+        uniqueId: item.custom_flora_arrangement ? getCartLineId({
+          id: item.item_code, custom_flora_arrangement: item.custom_flora_arrangement,
+        }) : item.name,
         item: item.item_code,
         item_name: item.item_name,
         item_image: null,

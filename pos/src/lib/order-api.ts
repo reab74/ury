@@ -1,6 +1,7 @@
 import { call } from '@ury/core';
 
 export interface POSInvoiceItem {
+  custom_flora_arrangement?: string;
   name: string;
   item_code: string;
   item_name: string;
@@ -74,6 +75,7 @@ export interface SyncOrderRequest {
     rate: number;
     qty: number;
     comment?: string;
+    custom_flora_arrangement?: string;
   }>;
   no_of_pax: number;
   mode_of_payment?: string;

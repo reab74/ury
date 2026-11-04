@@ -108,6 +108,7 @@ const OrderPanel = () => {
         items: activeOrders.map(item => ({
           item: item.id,
           item_name: item.name,
+          custom_flora_arrangement: item.custom_flora_arrangement,
           rate: item.selectedVariant?.price || item.price,
           qty: item.quantity,
           comment: item.comment || undefined

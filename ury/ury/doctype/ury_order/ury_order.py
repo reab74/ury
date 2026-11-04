@@ -540,6 +540,8 @@ def _copy_invoice_item_fields(item_row, qty):
         uom=item_row.uom,
         conversion_factor=item_row.conversion_factor,
         warehouse=item_row.warehouse,
+        **({"custom_flora_arrangement": item_row.get("custom_flora_arrangement")}
+           if item_row.get("custom_flora_arrangement") else {}),
     )
 
 
@@ -851,9 +853,17 @@ def price_items_for_invoice(items, price_list, pos_profile, branch, menu):
     `invoice.append("items", ...)` inside `sync_order`. Does not append to
     the invoice itself.
     """
+    from ury.ury.api.invoice_item_extensions import resolve_invoice_item, validate_arrangement_references
+
+    validate_arrangement_references(items)
+    context = {"price_list": price_list, "pos_profile": pos_profile, "branch": branch, "menu": menu}
     priced_items = []
 
     for d in items:
+        resolved = resolve_invoice_item(d, context)
+        if resolved is not None:
+            priced_items.append(resolved)
+            continue
 
         course = frappe.db.get_value("URY Menu Item", {"item": d.get("item"), "parent": menu}, "course")
 

@@ -1,4 +1,5 @@
 import { create } from 'zustand';
+import { getCartLineId } from '../lib/cart-line-identity';
 import { v4 as uuidv4 } from 'uuid';
 import { storage } from '@ury/core';
 import { getRestaurantMenu, getAggregatorMenu, MenuItem as APIMenuItem } from '../lib/menu-api';
@@ -23,6 +24,7 @@ class CartError extends Error {
 
 // Extend the API MenuItem to include UI-specific properties
 export interface MenuItem extends Omit<APIMenuItem, 'rate' | 'item_image'> {
+  custom_flora_arrangement?: string;
   id: string;
   name: string;
   image: string | null;
@@ -213,12 +215,7 @@ interface POSStore extends POSState {
   setShowVoluntaryClosing: (show: boolean) => void;
 }
 
-const generateUniqueId = (item: OrderItem): string => {
-  const variantId = item.selectedVariant?.id || 'default';
-  const addonIds = item.selectedAddons?.map(addon => addon.id).sort().join('-') || 'no-addons';
-  const commentStr = item.comment ? item.comment.trim() : '';
-  return `${item.id}-${variantId}-${addonIds}-${commentStr}`;
-};
+const generateUniqueId = getCartLineId;
 
 const calculateItemPrice = (item: OrderItem): number => {
   const basePrice = item.selectedVariant?.price || item.price;
@@ -234,13 +231,15 @@ export const generateCartHash = (state: Partial<POSState>) => {
   const items = state.activeOrders
     ?.map(i => ({
       itemId: i.id,
+      ...(i.custom_flora_arrangement ? { arrangement: i.custom_flora_arrangement } : {}),
       qty: i.quantity,
       variantId: i.selectedVariant?.id ?? null,
       addonIds: i.selectedAddons?.map(a => a.id).sort() ?? [],
       comment: i.comment ?? '',
     }))
     // Sort by itemId so order in array doesn't produce false positives.
-    .sort((a, b) => (a.itemId > b.itemId ? 1 : a.itemId < b.itemId ? -1 : 0));
+    .sort((a, b) => a.itemId > b.itemId ? 1 : a.itemId < b.itemId ? -1
+      : (a.arrangement || '').localeCompare(b.arrangement || ''));
   return JSON.stringify({
     items,
     customer: state.selectedCustomer?.id ?? null,
@@ -501,6 +500,8 @@ export const usePOSStore = create<POSStore>((set, get) => ({
       const existingItemIndex = get().activeOrders.findIndex(orderItem => orderItem.uniqueId === uniqueId);
 
       if (existingItemIndex !== -1) {
+        // A retry must not add another unit of the same physical preparation.
+        if (item.custom_flora_arrangement) return;
         const existingItem = get().activeOrders[existingItemIndex];
         const newQuantity = existingItem.quantity + item.quantity;
         const newComment = item.comment !== undefined ? item.comment : existingItem?.comment || "";
@@ -736,6 +737,7 @@ export const usePOSStore = create<POSStore>((set, get) => ({
         const orderItems: OrderItem[] = order.items.map(item => {
           const orderItem = {
             id: item.item_code,
+            custom_flora_arrangement: item.custom_flora_arrangement || undefined,
             name: item.item_name,
             price: item.rate,
             quantity: item.qty,
