@@ -14,13 +14,15 @@ class Rejected(Exception):
     pass
 
 
-def reject(message):
+def reject(message, *args):
     raise Rejected(message)
 
 
 frappe = types.ModuleType('frappe')
 frappe._ = lambda text: text
 frappe.throw = reject
+frappe.PermissionError = Rejected
+frappe.whitelist = lambda *args, **kwargs: lambda fn: fn
 frappe.get_hooks = Mock(return_value=[])
 frappe.get_attr = Mock()
 frappe.db = Mock()
@@ -91,6 +93,45 @@ class ExtensionTests(unittest.TestCase):
         for value in [[], {}, 1, ' ARR-1', 'ARR-1 ', 'x' * 141]:
             with self.subTest(value=value), self.assertRaises(Rejected):
                 validate_arrangement_references([{'custom_flora_arrangement': value}])
+
+    def test_order_guard_rejects_cancellation_before_table_or_kot_mutation(self):
+        cancel = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
+                      and node.name == 'cancel_order')
+        invoice = types.SimpleNamespace(branch='Cafe', restaurant_table='TABLE-1')
+        frappe.session = types.SimpleNamespace(user='Administrator')
+        frappe.get_doc = Mock(return_value=invoice)
+        frappe.has_permission = Mock(return_value=True)
+        frappe.get_hooks.return_value = ['flora.cancel_guard']
+        frappe.get_attr.return_value = Mock(side_effect=Rejected('unsupported cancellation'))
+        release, cancel_kot = Mock(), Mock()
+        local = {'frappe': frappe, '_': frappe._,
+                 'release_merge_cluster_tables': release, 'cancel_kot': cancel_kot}
+        exec(compile(ast.Module(body=[cancel], type_ignores=[]), 'ury_order.py', 'exec'), local)
+        with self.assertRaises(Rejected):
+            local['cancel_order']('POS-1', 'Cancel')
+        release.assert_not_called()
+        cancel_kot.assert_not_called()
+
+    def run_reduction_gate(self, previous, requested):
+        sync = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'sync_order')
+        gate = next(node for node in sync.body if isinstance(node, ast.If)
+                    and ast.unparse(node.test) == 'past_item and (not bool(posprofile.remove_items))')
+        local = {'past_item': previous, 'items': requested,
+                 'posprofile': types.SimpleNamespace(remove_items=0),
+                 'frappe': frappe, '_': frappe._, 'flt': lambda n: float(n or 0)}
+        exec(compile(ast.Module(body=[gate], type_ignores=[]), 'ury_order.py', 'exec'), local)
+
+    def test_cannot_replace_preparation_to_bypass_remove_items_permission(self):
+        with self.assertRaises(Rejected):
+            self.run_reduction_gate(
+                [{'item_code': 'BOUQUET', 'qty': 1, 'custom_flora_arrangement': 'ARR-1'}],
+                [{'item': 'BOUQUET', 'qty': 1, 'custom_flora_arrangement': 'ARR-2'}])
+
+    def test_native_reduction_permission_still_aggregates_normal_items(self):
+        previous = [{'item_code': 'COFFEE', 'qty': 1}, {'item_code': 'COFFEE', 'qty': 1}]
+        self.run_reduction_gate(previous, [{'item': 'COFFEE', 'qty': 2}])
+        with self.assertRaises(Rejected):
+            self.run_reduction_gate(previous, [{'item': 'COFFEE', 'qty': 1}])
 
 
 if __name__ == '__main__':

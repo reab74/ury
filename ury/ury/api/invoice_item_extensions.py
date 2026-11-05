@@ -31,3 +31,9 @@ def validate_arrangement_references(items):
         if reference in seen:
             frappe.throw(_("An arrangement cannot appear on multiple order rows."))
         seen.add(reference)
+
+
+def run_order_guards(hook, invoice, **context):
+    """Optional app guards run before cancellation/split side effects."""
+    for path in frappe.get_hooks(hook) or []:
+        frappe.get_attr(path)(invoice, **context)

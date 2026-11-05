@@ -570,6 +570,9 @@ def split_bill(source_invoice, items_to_move, customer=None):
     if source.docstatus != 0:
         frappe.throw(_("Only draft invoices can be split."))
 
+    from ury.ury.api.invoice_item_extensions import run_order_guards
+    run_order_guards("ury_before_bill_split", source, items_to_move=items_to_move)
+
     move_map = {
         row["name"]: float(row["qty"])
         for row in items_to_move
@@ -1533,6 +1536,7 @@ def sync_order(
             "item_name": item.item_name,
             "qty": item.qty,
             "comments": "",
+            "custom_flora_arrangement": item.get("custom_flora_arrangement"),
         }
         past_item.append(previous_item)
         
@@ -1543,15 +1547,17 @@ def sync_order(
     if isinstance(items, str):
         items = json.loads(items)
 
+    from ury.ury.api.invoice_item_extensions import validate_arrangement_references
+    validate_arrangement_references(items)
+
     # Reduction/removal permission: gate any decrease in a previously-sent
     # item's quantity (including full removal) by POS Profile `remove_items`,
     # matching Phase 2's can_reduce_items/can_remove_items derivation.
     if past_item and not bool(posprofile.remove_items):
         requested_qty_by_item = {}
         for d in items:
-            requested_qty_by_item[d.get("item")] = requested_qty_by_item.get(
-                d.get("item"), 0
-            ) + flt(d.get("qty"))
+            key = (d.get("item"), d.get("custom_flora_arrangement") or None)
+            requested_qty_by_item[key] = requested_qty_by_item.get(key, 0) + flt(d.get("qty"))
 
         # Aggregate previous qty per item too: a restaurant order can carry
         # the same item_code across multiple lines (different comments/
@@ -1560,9 +1566,8 @@ def sync_order(
         # as long as no single previous line's qty dropped on its own.
         previous_qty_by_item = {}
         for prev in past_item:
-            previous_qty_by_item[prev["item_code"]] = previous_qty_by_item.get(
-                prev["item_code"], 0
-            ) + flt(prev["qty"])
+            key = (prev["item_code"], prev.get("custom_flora_arrangement") or None)
+            previous_qty_by_item[key] = previous_qty_by_item.get(key, 0) + flt(prev["qty"])
 
         for item_code, prev_qty in previous_qty_by_item.items():
             if requested_qty_by_item.get(item_code, 0) < prev_qty:
@@ -1917,6 +1922,9 @@ def cancel_order(invoice_id, reason):
                 _("You are not allowed to cancel an invoice from another branch."),
                 frappe.PermissionError,
             )
+
+    from ury.ury.api.invoice_item_extensions import run_order_guards
+    run_order_guards("ury_before_order_cancel", pos_invoice)
 
     # Release the full merge cluster, not only the primary table and CSV partners.
     if pos_invoice.restaurant_table:

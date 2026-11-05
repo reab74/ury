@@ -41,3 +41,24 @@ No new package dependency, generated asset edit or ERPNext core change is needed
 
 Source baseline supplied: `a03947c`. Full frontend build and live acceptance must
 be recorded on the test VPS. Do not enable arrangement sales at stage 2A.
+
+## Stage 2B — manager lifecycle guards
+
+Flora baseline `f9db534`; URY baseline `d3d3e34`. The arrangement lifecycle now
+reserves saved drafts, completes POS sales and validates consolidation, while
+Regnosa's settings remain disabled pending live acceptance and cashier UI work.
+
+Optional `ury_before_order_cancel` and `ury_before_bill_split` hooks receive the
+loaded invoice (plus `items_to_move` for splitting). They run before side effects.
+Flora blocks unsupported arrangement cancellation/refunds/transfers. Cancellation
+is guarded before the existing URY table-release/commit path. The old unrelated
+URI draft cancellation implementation is not repaired in this patch.
+
+Item reduction permission checks distinguish arrangement references as well as
+Item Code. Replacing one preparation with another of the same Item Code cannot
+hide removal of the original. Ordinary Item quantity aggregation is preserved.
+
+These are backend-only changes. No frontend build is required in this stage.
+Continue running both offline Python suites and the existing Node cart harness;
+run each Flora suite separately. Use the Flora operations guide for deployment,
+acceptance limits and the next test-site checkpoint. Do not enable cashiers yet.
