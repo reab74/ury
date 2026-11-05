@@ -292,7 +292,7 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
   // Fix 2: submission-blocking validation. Every row must be explicitly
   // touched (not just numerically non-zero, since a blank input silently
   // becomes 0), and the total closing amount across all rows must be
-  // non-zero so an all-zero close can't slip through unnoticed.
+  // non-zero when any payment row has opening or expected activity.
   const validation = useMemo(() => {
     if (rows.length === 0) {
       return { isValid: false, blockingMessage: null as string | null, warningMessage: null as string | null };
@@ -311,7 +311,10 @@ const POSClosingDialog = ({ open, onOpenChange, onClosingSubmitted }: POSClosing
     let blockingMessage: string | null = null;
     if (untouchedCount > 0) {
       blockingMessage = t('pos_closing.validation_missing_rows');
-    } else if (totalClosing === 0) {
+    } else if (
+      totalClosing === 0 &&
+      rows.some((row) => row.opening_amount !== 0 || row.expected_amount !== 0)
+    ) {
       blockingMessage = t('pos_closing.validation_all_zero');
     }
 

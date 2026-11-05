@@ -92,3 +92,16 @@ row and total values are estimates; absent valuation remains Unavailable. No
 estimated rates are sent into draft or stock-entry payloads. Node tests cover
 zero versus unavailable, quantity multiplication and incomplete totals. Build
 and live cost display checks remain required; preparation stays disabled.
+
+### Live verification — 6 November 2026
+
+Zero-sales session closed successfully with explicitly entered zero amounts.
+Arrangement FL-ARR-00020 used existing Item REG-TEST-ARR-001.
+Repack MAT-STE-2026-00028 consumed 20 roses and 1 packaging:
+total valuation QAR 105, one finished unit produced.
+Draft POS Invoice REG-00013 reserved the arrangement and preserved its row link.
+Cash payment QAR 150 submitted the invoice and completed the arrangement.
+POS closing consolidated into submitted Sales Invoice ACC-SINV-2026-00036,
+with update_stock 1 and the arrangement reference preserved.
+Verified finished-item stock movement -1 and remaining quantity 0.
+Mixed orders, concurrency and general cashier permissions remain unverified.
