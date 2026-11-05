@@ -37,3 +37,16 @@ def run_order_guards(hook, invoice, **context):
     """Optional app guards run before cancellation/split side effects."""
     for path in frappe.get_hooks(hook) or []:
         frappe.get_attr(path)(invoice, **context)
+
+
+@frappe.whitelist()
+def get_pos_features(pos_profile):
+    """Optional UI providers determine access; apps without providers return []."""
+    from ury.ury_pos.api import _require_ury_profile_access
+    _require_ury_profile_access(pos_profile)
+    result = []
+    for path in frappe.get_hooks("ury_pos_features") or []:
+        feature = frappe.get_attr(path)(pos_profile)
+        if feature:
+            result.append(feature)
+    return result

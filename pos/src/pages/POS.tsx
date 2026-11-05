@@ -9,6 +9,7 @@ import { usePOSStore } from '../store/pos-store';
 import { cn } from '@ury/ui';
 import { Spinner } from '@ury/ui';
 import InitialLoader from '../components/InitialLoader';
+import { ArrangementLauncher } from '../components/ArrangementBuilder';
 
 export default function POS() {
   const {
@@ -132,6 +133,7 @@ export default function POS() {
                 disabled={isMenuInteractionDisabled()}
               /> */}
               
+              <ArrangementLauncher />
               <QuickFilterButton filter="all" icon={Star} label={t('common.all')} />
               <QuickFilterButton filter="special" icon={TrendingUp} label={t('menu.special_items')} />
             </div>

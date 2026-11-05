@@ -4,7 +4,7 @@ import sys
 import types
 import unittest
 from pathlib import Path
-from unittest.mock import Mock
+from unittest.mock import Mock, patch
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
@@ -27,7 +27,7 @@ frappe.get_hooks = Mock(return_value=[])
 frappe.get_attr = Mock()
 frappe.db = Mock()
 sys.modules['frappe'] = frappe
-from ury.ury.api.invoice_item_extensions import resolve_invoice_item, validate_arrangement_references
+from ury.ury.api.invoice_item_extensions import resolve_invoice_item, validate_arrangement_references, get_pos_features
 
 # Exercise the actual pricing function without importing unrelated ERPNext code.
 tree = ast.parse((ROOT / 'ury/ury/doctype/ury_order/ury_order.py').read_text())
@@ -132,6 +132,31 @@ class ExtensionTests(unittest.TestCase):
         self.run_reduction_gate(previous, [{'item': 'COFFEE', 'qty': 2}])
         with self.assertRaises(Rejected):
             self.run_reduction_gate(previous, [{'item': 'COFFEE', 'qty': 1}])
+
+    def test_feature_discovery_is_optional(self):
+        api = types.ModuleType('ury.ury_pos.api')
+        api._require_ury_profile_access = Mock()
+        with patch.dict(sys.modules, {api.__name__: api}):
+            self.assertEqual(get_pos_features('Regnosa Cafe'), [])
+        api._require_ury_profile_access.assert_called_once_with('Regnosa Cafe')
+
+    def test_feature_provider_can_hide_ui(self):
+        api = types.ModuleType('ury.ury_pos.api')
+        api._require_ury_profile_access = Mock()
+        frappe.get_hooks.return_value = ['flora.feature']
+        provider = Mock(return_value=None)
+        frappe.get_attr.return_value = provider
+        with patch.dict(sys.modules, {api.__name__: api}):
+            self.assertEqual(get_pos_features('Regnosa Cafe'), [])
+            provider.return_value = {'id': 'flora_arrangements'}
+            self.assertEqual(get_pos_features('Regnosa Cafe'), [{'id': 'flora_arrangements'}])
+
+    def test_feature_discovery_denies_foreign_profile_before_provider(self):
+        api = types.ModuleType('ury.ury_pos.api')
+        api._require_ury_profile_access = Mock(side_effect=Rejected('profile'))
+        with patch.dict(sys.modules, {api.__name__: api}), self.assertRaises(Rejected):
+            get_pos_features('Other')
+        frappe.get_attr.assert_not_called()
 
 
 if __name__ == '__main__':

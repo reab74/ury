@@ -1022,7 +1022,7 @@ def create_pos_opening_entry(pos_profile: str, company: str, balance_details) ->
 
 
 @frappe.whitelist()
-def get_pos_opening_screen_data() -> dict:
+def get_pos_opening_screen_data(pos_profile=None) -> dict:
     """Return the full context needed by the ORI native POS Opening screen.
 
     This is a read-only, permission-aware context call. It aggregates the
@@ -1038,54 +1038,8 @@ def get_pos_opening_screen_data() -> dict:
     """
     user = frappe.session.user
 
-    # Company resolution: user default first, then global default.
-    company = frappe.defaults.get_user_default("Company")
-    if not company:
-        company = frappe.db.get_default("Company")
-
-    if not company:
-        frappe.throw(_("Set an allowed default Company for this user."))
-    frappe.get_doc("Company", company).check_permission("read")
-
-    allowed_profiles = _get_allowed_pos_profiles(company, user)
-
-    # Resolve the active POS Profile. Prefer the existing URY helper; fall
-    # back to the first allowed profile if the helper cannot resolve one.
-    pos_profile_data = None
-    pos_profile_name = None
-    try:
-        pos_profile_data = getPosProfile()
-        pos_profile_name = pos_profile_data.get("pos_profile")
-        allowed_names = {row["name"] for row in allowed_profiles}
-        if pos_profile_name and pos_profile_name not in allowed_names:
-            frappe.throw(
-                _("Your branch profile is not allowed for the selected company."),
-                frappe.PermissionError,
-            )
-    except frappe.PermissionError:
-        raise
-    except Exception:
-        pos_profile_data = None
-        pos_profile_name = None
-
-    if not pos_profile_name and allowed_profiles:
-        pos_profile_name = allowed_profiles[0]["name"]
-        try:
-            pos_profile_doc = _require_ury_profile_access(pos_profile_name)
-            pos_profile_data = {
-                "pos_profile": pos_profile_doc.name,
-                "branch": pos_profile_doc.branch,
-                "company": pos_profile_doc.company,
-                "restaurant": pos_profile_doc.restaurant,
-                "warehouse": pos_profile_doc.warehouse,
-                "cashier": user,
-                "multiple_cashier": pos_profile_doc.custom_enable_multiple_cashier,
-                "custom_daily_pos_close": pos_profile_doc.custom_daily_pos_close,
-            }
-        except frappe.PermissionError:
-            raise
-        except Exception:
-            pos_profile_data = None
+    from ury.ury.api.opening_context import resolve_opening_context
+    company, allowed_profiles, pos_profile_data, pos_profile_name = resolve_opening_context(pos_profile)
 
     # Payment modes with opening_amount default 0.
     payment_modes = []

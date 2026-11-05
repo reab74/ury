@@ -62,3 +62,33 @@ These are backend-only changes. No frontend build is required in this stage.
 Continue running both offline Python suites and the existing Node cart harness;
 run each Flora suite separately. Use the Flora operations guide for deployment,
 acceptance limits and the next test-site checkpoint. Do not enable cashiers yet.
+
+## Stage 3 — arrangement dialog, manager preview
+
+Baselines: Flora `1a4cef4`, URY `58afbdf`. Optional `ury_pos_features` providers
+return UI feature metadata after the current profile access check. Flora exposes
+`flora_arrangements` to assigned System Managers on configured URY profiles.
+No new dependency or permission assignment is introduced.
+
+The toolbar opens a searchable existing/new finished Item selector, components,
+price and notes. Saved Draft/Repacked arrangements can be resumed separately.
+Save Draft consumes no stock; Prepare & Add calls Flora's controlled API, retains
+the saved ID after failures, and verifies the destination tab/profile before add.
+Settings remain disabled during preview, so preparation cannot be invoked in UI.
+
+English, French and Arabic text is included. Full Vite build and browser checks
+must run on the VPS; local frontend dependencies were unavailable. No schema
+changes are included, so this stage needs an asset build, cache clear and shared
+service restart, but no migration. See Flora's operations guide for acceptance.
+
+## Material cost display / Item search clarification
+
+The builder displays its configured finished Item Group/UOM and an explicit
+search/no-match state. Eligibility is unchanged; an expected Item Code must be
+checked before changing any group selection policy or shared Item master.
+
+Manager preview estimates use Flora's configured raw-material warehouse. Unit,
+row and total values are estimates; absent valuation remains Unavailable. No
+estimated rates are sent into draft or stock-entry payloads. Node tests cover
+zero versus unavailable, quantity multiplication and incomplete totals. Build
+and live cost display checks remain required; preparation stays disabled.

@@ -37,9 +37,17 @@ const context = {
   },
 };
 vm.runInNewContext(
-  js('pos/src/lib/cart-line-identity.ts') + '\n' + js('pos/src/store/pos-store.ts') +
-  '\n;globalThis.testExports = { getCartLineId, generateCartHash };', context);
-const { getCartLineId, generateCartHash } = context.testExports;
+  js('pos/src/lib/arrangement-cost.ts') + '\n' + js('pos/src/lib/cart-line-identity.ts') + '\n' + js('pos/src/store/pos-store.ts') +
+  '\n;globalThis.testExports = { getCartLineId, generateCartHash, estimatedLineCost, estimatedTotalCost };', context);
+const { getCartLineId, generateCartHash, estimatedLineCost, estimatedTotalCost } = context.testExports;
+assert.equal(estimatedLineCost(5, 2), 10);
+assert.equal(estimatedLineCost(0, 2), 0);
+assert.equal(estimatedLineCost(null, 2), null);
+assert.equal(estimatedLineCost(5, NaN), null);
+assert.equal(estimatedLineCost(5, -1), null);
+assert.equal(estimatedTotalCost([{ item_code: 'ROSE', qty: 2 }, { item_code: 'BOX', qty: 1 }], { ROSE: 5, BOX: 3 }), 13);
+assert.equal(estimatedTotalCost([{ item_code: 'ROSE', qty: 2 }, { item_code: 'BOX', qty: 1 }], { ROSE: 5 }), null);
+console.log('Material cost arithmetic and unavailable/zero distinctions passed.');
 
 (async () => {
   const coffee = { id: 'COFFEE', quantity: 1, price: 12 };
