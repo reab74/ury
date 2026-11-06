@@ -105,3 +105,18 @@ POS closing consolidated into submitted Sales Invoice ACC-SINV-2026-00036,
 with update_stock 1 and the arrangement reference preserved.
 Verified finished-item stock movement -1 and remaining quantity 0.
 Mixed orders, concurrency and general cashier permissions remain unverified.
+
+### Mixed-order verification — 6 November 2026
+
+REG-00014 combined REG Test Tea at QAR 10 with arrangement
+FL-ARR-00021 / REG-TEST-ARR-001 at QAR 50.
+Arrangement preparation linked to MAT-STE-2026-00029.
+Draft reservation and arrangement row identity were verified.
+Cash payment QAR 60 submitted the invoice, outstanding 0,
+and completed the arrangement.
+Closing created submitted Regnosa Sales Invoice ACC-SINV-2026-00037.
+Both item lines and the arrangement reference were preserved.
+Verified arrangement stock movement -1.
+No tea stock movement was returned; tea stock configuration and
+ingredient consumption have not been verified.
+Concurrency and operation without System Manager remain unverified.
