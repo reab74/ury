@@ -94,23 +94,14 @@ class ExtensionTests(unittest.TestCase):
             with self.subTest(value=value), self.assertRaises(Rejected):
                 validate_arrangement_references([{'custom_flora_arrangement': value}])
 
-    def test_order_guard_rejects_cancellation_before_table_or_kot_mutation(self):
-        cancel = next(node for node in tree.body if isinstance(node, ast.FunctionDef)
-                      and node.name == 'cancel_order')
+    def test_extension_cancel_guard_propagates_denial(self):
+        from ury.ury.api.invoice_item_extensions import run_order_guards
         invoice = types.SimpleNamespace(branch='Cafe', restaurant_table='TABLE-1')
-        frappe.session = types.SimpleNamespace(user='Administrator')
-        frappe.get_doc = Mock(return_value=invoice)
-        frappe.has_permission = Mock(return_value=True)
         frappe.get_hooks.return_value = ['flora.cancel_guard']
         frappe.get_attr.return_value = Mock(side_effect=Rejected('unsupported cancellation'))
-        release, cancel_kot = Mock(), Mock()
-        local = {'frappe': frappe, '_': frappe._,
-                 'release_merge_cluster_tables': release, 'cancel_kot': cancel_kot}
-        exec(compile(ast.Module(body=[cancel], type_ignores=[]), 'ury_order.py', 'exec'), local)
         with self.assertRaises(Rejected):
-            local['cancel_order']('POS-1', 'Cancel')
-        release.assert_not_called()
-        cancel_kot.assert_not_called()
+            run_order_guards('ury_before_order_cancel', invoice)
+        frappe.get_attr.assert_called_once_with('flora.cancel_guard')
 
     def run_reduction_gate(self, previous, requested):
         sync = next(node for node in tree.body if isinstance(node, ast.FunctionDef) and node.name == 'sync_order')

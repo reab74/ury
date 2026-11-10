@@ -120,3 +120,58 @@ Verified arrangement stock movement -1.
 No tea stock movement was returned; tea stock configuration and
 ingredient consumption have not been verified.
 Concurrency and operation without System Manager remain unverified.
+
+
+### Draft order cancellation correction — 11 November 2026
+
+The live cashier Cancel action on an ordinary tea draft failed because cancel_order
+called Document.cancel() before its draft/submitted branch, then contained a second
+cancel call and direct docstatus writes. The test draft was subsequently deleted
+through the Administrator's normal deletion hooks; no live patch verification yet.
+
+Draft cancellation now retains the invoice with docstatus 0 and operational status
+Cancelled, reason and an audit comment. It neither submits nor forces docstatus 2,
+and retains the POS Invoice identity used by KOT company/profile checks. Active
+order and table lookups exclude these voids. A persisted void cannot be edited,
+submitted, paid or reopened through normal saves or the controlled order paths.
+This operational state is intentionally distinct from a submitted accounting
+invoice cancelled through ERPNext. Submitted ordinary invoices use cancel() once;
+consolidated invoices, returns and merged bills fail closed. Arrangement cancellation
+remains blocked by Flora's existing guard until its supported workflow exists.
+
+Cancellation is POST-only, locks the invoice, checks invoice cancel/read rights,
+profile/company/branch and existing ownership/room rules, and requires draft write
+rights. It commits nothing itself. KOT errors propagate; table/KOT/invoice writes
+share the caller's transaction. Table release excludes retained voids and preserves
+other active orders in the merge cluster. Native on_cancel/on_trash table cleanup
+also uses commit=False. Original matching KOTs use their normal cancel workflow,
+with narrow server authorization rather than general KOT cancellation grants.
+Cancellation tickets keep comments, route within the profile and print after commit.
+Without original live KOTs, no cancellation ticket needs to be generated. With live
+KOTs, missing routing/naming or ticket generation fails the transaction visibly.
+
+75 isolated Python checks passed (24 cancellation, 14 extensions, 25 KOT access,
+12 opening context) plus the Node cart/cost harness and Python compilation.
+These are doubles/source harnesses, not live accounting, KDS or printer acceptance.
+Apply on the test site, clear cache and restart shared services; no migration,
+frontend build or permission change is required. Test a fresh ordinary tea draft
+first, inspect status/docstatus/reason and absence of stock/GL entries, then verify
+payment/edit attempts fail and arrangement cancellation is still denied. Table/KOT
+cancellation and submitted invoice reversal remain live acceptance items.
+
+### Live draft cancellation verification — 11 November 2026
+
+Backup, patch application, 75 isolated Python tests, Node checks,
+cache clearing and shared service restart succeeded.
+
+Cashier cancelled unpaid tea order REG-00020 through the POS interface.
+Verified docstatus 0, operational status Cancelled, total QAR 10,
+and reason "Draft cancellation test".
+Verified zero Stock Ledger Entries and zero GL Entries for the invoice.
+Original KOT KOT-URY-00020 became docstatus 2.
+Cancellation ticket CNCL-KOT-URY-00003 was submitted with docstatus 1.
+Cashier edit/save and payment-access checks both rejected the cancelled
+order with the expected cancellation message. Edit attempt was rolled back.
+
+Physical printing, shared-table release and submitted ordinary-invoice
+cancellation remain unverified live.

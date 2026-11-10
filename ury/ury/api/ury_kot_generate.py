@@ -206,7 +206,7 @@ def process_items_for_cancel_kot(
     kot_items = create_order_items(items)
     pos_profile = frappe.get_doc("POS Profile", pos_profile_id)
     productions = frappe.db.get_all(
-        "URY Production Unit", filters={"branch": pos_profile.branch}, fields=["name"]
+        "URY Production Unit", filters={"branch": pos_profile.branch, "pos_profile": pos_profile_id}, fields=["name"]
     )
 
     created_kot_names = []

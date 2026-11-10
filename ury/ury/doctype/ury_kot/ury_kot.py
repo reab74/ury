@@ -11,7 +11,11 @@ from ury.ury.api.kot_access import publish_kot_event
 
 class URYKOT(Document):
     def on_submit(self):
-        self.multi_print_kot()
+        if self.type == "Cancelled":
+            # A failed cancellation must not print a ticket for a rolled-back void.
+            frappe.db.after_commit.add(self.multi_print_kot)
+        else:
+            self.multi_print_kot()
         self.kotDisplayRealtime()
 
     def before_submit(self):

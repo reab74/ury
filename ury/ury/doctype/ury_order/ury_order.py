@@ -162,7 +162,7 @@ def _sync_active_order_with_merge_cluster(table):
     invoices = frappe.get_all(
         "POS Invoice",
         filters={
-            "docstatus": 0,
+            "docstatus": 0, "status": ["!=", "Cancelled"],
             "invoice_printed": 0,
         },
         fields=[
@@ -226,7 +226,7 @@ def _table_has_active_order(table_name):
         frappe.db.exists(
             "POS Invoice",
             {
-                "docstatus": 0,
+                "docstatus": 0, "status": ["!=", "Cancelled"],
                 "restaurant_table": table_name,
                 "invoice_printed": 0,
             },
@@ -334,13 +334,13 @@ def _open_invoice_names_for_table(table):
     names = set()
     for row in frappe.get_all(
         "POS Invoice",
-        filters={"docstatus": 0, "restaurant_table": table},
+        filters={"docstatus": 0, "status": ["!=", "Cancelled"], "restaurant_table": table},
         fields=["name"],
     ):
         names.add(row.name)
     for row in frappe.get_all(
         "POS Invoice",
-        filters={"docstatus": 0, "custom_merged_tables": ["like", f"%{table}%"]},
+        filters={"docstatus": 0, "status": ["!=", "Cancelled"], "custom_merged_tables": ["like", f"%{table}%"]},
         fields=["name"],
     ):
         names.add(row.name)
@@ -425,7 +425,7 @@ def _has_open_pos_invoices_for_cluster(tables):
         invoices = frappe.get_all(
             "POS Invoice",
             filters={
-                "docstatus": 0,
+                "docstatus": 0, "status": ["!=", "Cancelled"],
                 "restaurant_table": table,
             },
             fields=[
@@ -442,7 +442,7 @@ def _has_open_pos_invoices_for_cluster(tables):
         merged = frappe.get_all(
             "POS Invoice",
             filters={
-                "docstatus": 0,
+                "docstatus": 0, "status": ["!=", "Cancelled"],
                 "custom_merged_tables": ["like", f"%{table}%"],
             },
             fields=[
@@ -731,8 +731,14 @@ def _resolve_or_create_pos_invoice(table, invoiceNo, order_type, is_payment, che
         if invoice.branch and user_branch and invoice.branch != user_branch:
             frappe.throw(frappe._("Not permitted to view orders outside your active branch"), frappe.PermissionError)
 
+    if invoiceNo:
+        from ury.ury.api.order_cancellation import assert_active_order
+        explicit = frappe.get_doc("POS Invoice", invoiceNo)
+        _enforce_read_permission(explicit)
+        assert_active_order(explicit)
+
     if table:
-        filters = {"docstatus": 0}
+        filters = {"docstatus": 0, "status": ["!=", "Cancelled"]}
         if invoiceNo:
             filters["name"] = invoiceNo
         elif is_payment != "Payments":
@@ -796,12 +802,12 @@ def _resolve_or_create_pos_invoice(table, invoiceNo, order_type, is_payment, che
 
         if is_payment == "Payments":
             invoice_name = frappe.get_value(
-                "POS Invoice", dict(restaurant_table=table, docstatus=0, name=invoiceNo)
+                "POS Invoice", dict(restaurant_table=table, docstatus=0, status=["!=", "Cancelled"], name=invoiceNo)
             )
 
         else:
             invoice_name = frappe.get_value(
-                "POS Invoice", dict(docstatus=0, name=invoiceNo)
+                "POS Invoice", dict(docstatus=0, status=["!=", "Cancelled"], name=invoiceNo)
             )
 
         if invoice_name:
@@ -959,6 +965,9 @@ def _enforce_order_access(invoice, pos_profile_name=None, require_modify=False, 
     source used elsewhere) to include the order's table room — unless the
     user already has elevated or billing access.
     """
+    if require_modify:
+        from ury.ury.api.order_cancellation import assert_active_order
+        assert_active_order(invoice)
     flags = _order_ownership_flags(invoice, pos_profile_name)
     allowed = flags["can_modify"] if require_modify else flags["can_view"]
 
@@ -1073,7 +1082,7 @@ def get_table_order_context(table):
     # not-yet-printed POS Invoice on this table or a table merged into it.
     invoices = frappe.get_all(
         "POS Invoice",
-        filters={"docstatus": 0, "invoice_printed": 0},
+        filters={"docstatus": 0, "status": ["!=", "Cancelled"], "invoice_printed": 0},
         or_filters={
             "restaurant_table": table,
             "custom_merged_tables": ["like", f"%{table}%"],
@@ -1901,63 +1910,10 @@ def customer_favourite_item(customer_name):
     return result
 
 
-@frappe.whitelist()
+@frappe.whitelist(methods=["POST"])
 def cancel_order(invoice_id, reason):
-    pos_invoice = frappe.get_doc("POS Invoice", invoice_id)
-
-    # Authorization gate: the session user must hold cancel rights on this
-    # specific invoice before any mutation happens.
-    if not frappe.has_permission("POS Invoice", "cancel", doc=pos_invoice):
-        frappe.throw(
-            _("You do not have permission to cancel this invoice."),
-            frappe.PermissionError,
-        )
-
-    # Branch scoping: the invoice must belong to the session user's branch
-    # (mirrors the getBranch() pattern used across the URY APIs).
-    if frappe.session.user != "Administrator":
-        user_branch = getBranch()
-        if pos_invoice.branch != user_branch:
-            frappe.throw(
-                _("You are not allowed to cancel an invoice from another branch."),
-                frappe.PermissionError,
-            )
-
-    from ury.ury.api.invoice_item_extensions import run_order_guards
-    run_order_guards("ury_before_order_cancel", pos_invoice)
-
-    # Release the full merge cluster, not only the primary table and CSV partners.
-    if pos_invoice.restaurant_table:
-        release_merge_cluster_tables(pos_invoice.restaurant_table)
-
-    try:
-        cancel_kot(invoice_id)
-
-    except Exception as e:
-        # If an exception occurs (e.g., "kot" app not found), it will be caught here without effecting execution
-        pass
-
-    # Use standard Frappe cancel workflow instead of raw SQL
-    pos_invoice.db_set("cancel_reason", reason)
-    pos_invoice.cancel()
-    if pos_invoice.docstatus == 1:
-        # Submitted invoice: cancel through the standard document workflow so
-        # on_cancel hooks run and GL/payment reversals and audit entries are
-        # produced (docstatus=2 on the invoice and its items).
-        pos_invoice.cancel()
-        pos_invoice.db_set("cancel_reason", reason)
-    else:
-        # Draft invoice: Frappe's standard workflow does not allow cancelling
-        # drafts, so update the status directly as before.
-        frappe.db.sql("""
-            UPDATE `tabPOS Invoice Item`
-            SET docstatus = 2
-            WHERE parent = %s
-        """, (invoice_id,))
-
-        frappe.db.set_value("POS Invoice", invoice_id, "docstatus", 2)
-        frappe.db.set_value("POS Invoice", invoice_id, "status", "Cancelled")
-        frappe.db.set_value("POS Invoice", invoice_id, "cancel_reason", reason)
+    from ury.ury.api.order_cancellation import cancel_order_transaction
+    return cancel_order_transaction(invoice_id, reason)
 
 # Roles permitted to authorize an additional discount when settling an order.
 DISCOUNT_ALLOWED_ROLES = frozenset(
@@ -2099,56 +2055,36 @@ def make_invoice(customer, payments, cashier, pos_profile,owner, additionalDisco
 
 # Cancel KOT Doc Creation
 def cancel_kot(invoice_id):
-
     pos_invoice = frappe.get_doc("POS Invoice", invoice_id)
-    pos_profile_id = pos_invoice.pos_profile
-    pos_profile = frappe.get_doc("POS Profile", pos_profile_id)
-    kot_naming_series = pos_profile.custom_kot_naming_series
-    cancel_kot_naming_series = "CNCL-" + kot_naming_series
-
-    items = []
-    # Create a list of items for the canceled KOT
-    for item in pos_invoice.items:
-        order_item = {
-            "item_code": item.get("item", item.get("item_code")),
-            "qty": item.qty,
-            "item_name": item.item_name,
-        }
-        items.append(order_item)
-
-    if pos_invoice.restaurant_table:
-        restaurant_table = pos_invoice.restaurant_table
-    else:
-        restaurant_table = None
-
-    # Process items for a canceled KOT
-    process_items_for_cancel_kot(
-        invoice_id,
-        pos_invoice.customer,
-        restaurant_table,
-        items,
-        "",
-        pos_profile_id,
-        cancel_kot_naming_series,
-        "Cancelled",
-        items,
-    )
-
-    # Set the KOTs associated with the invoice as canceled
-    kot_list = frappe.db.get_list(
-        "URY KOT",
-        filters={
-            "invoice": invoice_id,
-            "type": ("in", ("New Order", "Order Modified")),
-            "docstatus": 1,
-        },
-        fields=("*"),
-    )
-
-    for item in kot_list:
-        kot_doc = frappe.get_doc("URY KOT", item.name)
-        kot_doc.docstatus = 2
-        kot_doc.save()
+    kot_list = frappe.get_all("URY KOT", filters={
+        "invoice": invoice_id, "type": ["in", ["New Order", "Order Modified"]],
+        "docstatus": 1,
+    }, fields=["name"], order_by="name asc", limit_page_length=0)
+    if not kot_list:
+        return
+    profile = frappe.get_doc("POS Profile", pos_invoice.pos_profile)
+    if not profile.custom_kot_naming_series:
+        frappe.throw(_("Configure the KOT naming series before cancelling kitchen orders."))
+    items = [{"item_code": item.item_code, "qty": item.qty,
+              "item_name": item.item_name, "comments": item.get("comment") or ""}
+             for item in pos_invoice.items]
+    tickets = []
+    for row in kot_list:
+        ticket = frappe.get_doc("URY KOT", row.name, for_update=True)
+        if (ticket.invoice != invoice_id or ticket.pos_profile != pos_invoice.pos_profile
+                or ticket.branch != pos_invoice.branch or ticket.docstatus != 1):
+            frappe.throw(_("Kitchen ticket does not match its order."))
+        tickets.append(ticket)
+    created = process_items_for_cancel_kot(invoice_id, pos_invoice.customer,
+        pos_invoice.restaurant_table or None, items, "", pos_invoice.pos_profile,
+        "CNCL-" + profile.custom_kot_naming_series, "Cancelled", items)
+    if not created:
+        frappe.throw(_("No cancellation ticket was generated. Check production routing before retrying."))
+    for ticket in tickets:
+        # Narrow authorization: invoice cancellation already authorized this
+        # matching ticket. Do not grant cashiers general KOT cancellation rights.
+        ticket.flags.ignore_permissions = True
+        ticket.cancel()
 
 
 def change_table_in_kot(invoice, new_table, branch):
@@ -2182,6 +2118,8 @@ def _validate_payment_order_access(invoice_name, pos_profile):
     invoice.check_permission("read")
     invoice.check_permission("write")
     invoice.check_permission("submit")
+    from ury.ury.api.order_cancellation import assert_active_order
+    assert_active_order(invoice)
 
     if invoice.company != profile.company or invoice.pos_profile != profile.name:
         frappe.throw(

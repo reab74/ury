@@ -116,7 +116,9 @@ def validate_invoice_print(doc, method):
 
 def table_status_delete(doc, method):
     if doc.restaurant_table:
-        release_merge_cluster_tables(doc.restaurant_table)
+        from ury.ury.doctype.ury_order.ury_order import _free_tables_if_no_open_invoices
+        _free_tables_if_no_open_invoices(doc.restaurant_table,
+            doc.get("custom_merged_tables"), commit=False)
 
 
 def pos_invoice_naming(doc, method):
@@ -217,7 +219,7 @@ def restrict_existing_order(doc, event):
         "POS Invoice",
         {
             "restaurant_table": doc.restaurant_table,
-            "docstatus": 0,
+            "docstatus": 0, "status": ["!=", "Cancelled"],
             "invoice_printed": 0,
         },
     )
