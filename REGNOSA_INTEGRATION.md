@@ -209,3 +209,20 @@ cleared latest_invoice_time. Both orders retained docstatus 0 / Cancelled.
 This verifies shared-table split bills, not a merged-table cluster.
 Physical printing, merged-table-cluster release and submitted ordinary
 invoice cancellation remain unverified live.
+
+### Live merged-table cancellation verification — 14 November 2026
+
+Cashier merged RMD-01 and RMD-02 through the UI and saved unpaid,
+unprinted tea order REG-00024 at QAR 10.
+Verified primary table RMD-01, custom_merged_tables RMD-02,
+both tables occupied and reciprocal merge links present.
+
+Cashier cancelled REG-00024 with reason "Merged-table cancellation test".
+Verified docstatus 0 and status Cancelled.
+Both tables became occupied 0, with merged_with and latest_invoice_time
+cleared.
+
+Single-table release, shared-table split-bill protection and release of
+a merged-table cluster are now verified live for unpaid ordinary orders.
+Physical printing and submitted ordinary-invoice cancellation remain
+unverified live.
