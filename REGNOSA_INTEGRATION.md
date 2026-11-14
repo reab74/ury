@@ -192,3 +192,20 @@ cleared latest_invoice_time. Both orders retained docstatus 0 / Cancelled.
 This verifies shared-table split bills, not a merged-table cluster.
 Physical printing, merged-table-cluster release and submitted ordinary
 invoice cancellation remain unverified live.
+
+### Live table cancellation verification — 14 November 2026
+
+Single-table test: cashier cancelled unpaid Dine In order REG-00021
+on RMD-01. Verified docstatus 0, status Cancelled, table occupied 0,
+latest_invoice_time cleared and merged_with empty.
+
+Shared-table test: REG-00022 contained two teas and was split through
+the UI into REG-00022 and REG-00023, one tea / QAR 10 each.
+Both were unpaid, unprinted drafts on RMD-01.
+Cancelling REG-00023 preserved REG-00022 as Draft and table occupied 1.
+Cancelling the final active bill REG-00022 set table occupied 0 and
+cleared latest_invoice_time. Both orders retained docstatus 0 / Cancelled.
+
+This verifies shared-table split bills, not a merged-table cluster.
+Physical printing, merged-table-cluster release and submitted ordinary
+invoice cancellation remain unverified live.
