@@ -3,6 +3,7 @@ from frappe import _
 
 import base64
 import os
+import tempfile
 
 from pypdf import PdfWriter
 from cryptography.hazmat.primitives import hashes, serialization
@@ -27,101 +28,69 @@ def network_printing(
     no_letterhead=0,
 ):
     validate_print_permission(frappe.get_doc(doctype, name))
-
+    # Raise on failure: a normal string response is treated as success by clients.
     try:
-        print_settings = frappe.get_doc("Network Printer Settings", printer_setting)
+        import cups
+    except ImportError:
+        frappe.throw(_("Python CUPS is unavailable on the print server."))
 
+    print_settings = frappe.get_doc("Network Printer Settings", printer_setting)
+    try:
+        conn = cups.Connection(host=print_settings.server_ip, port=int(print_settings.port))
+    except Exception as exc:
+        frappe.throw(_("Could not connect to CUPS: {0}").format(str(exc)))
+
+    output = frappe.get_print(
+        doctype, name, print_format, doc=doc,
+        no_letterhead=no_letterhead, as_pdf=True, output=PdfWriter(),
+    )
+    # Keep the spool file private and remove it on both acceptance and rejection.
+    with tempfile.NamedTemporaryFile(prefix="ury-print-", suffix=".pdf") as spool:
+        output.write(spool)
+        spool.flush()
         try:
-            import cups
-        except ImportError:
-            return "Failed to import cups"
+            job_id = conn.printFile(print_settings.printer_name, spool.name, name, {})
+        except Exception as exc:
+            frappe.throw(_("CUPS rejected the print job: {0}").format(str(exc)))
+        if not isinstance(job_id, int) or isinstance(job_id, bool) or job_id <= 0:
+            frappe.throw(_("CUPS did not return a valid print job ID."))
 
-        try:
-            cups.setServer(print_settings.server_ip)
-            cups.setPort(print_settings.port)
-            conn = cups.Connection()
-        except Exception as e:
-            return f"Failed to connect to the printer: {str(e)}"
-
-        try:
-            output = PdfWriter()
-            output = frappe.get_print(
-                doctype,
-                name,
-                print_format,
-                doc=doc,
-                no_letterhead=no_letterhead,
-                as_pdf=True,
-                output=output,
-            )
-            file_path = os.path.join(
-                "/", "tmp", f"frappe-pdf-{frappe.generate_hash()}.pdf"
-            )
-            try:
-                with open(file_path, "wb") as f:
-                    output.write(f)
-                conn.printFile(print_settings.printer_name, file_path, name, {})
-
-                restaurant_table, invoice_printed, name = frappe.db.get_value(
-                    "POS Invoice", name, ["restaurant_table", "invoice_printed", "name"]
-                )
-
-                if restaurant_table and invoice_printed == 0:
-                    frappe.db.set_value("POS Invoice", name, "invoice_printed", 1)
-                    release_merge_cluster_tables(restaurant_table)
-                else:
-                    frappe.db.set_value("POS Invoice", name, "invoice_printed", 1)
-
-                return "Success"
-            finally:
-                if os.path.exists(file_path):
-                    os.remove(file_path)
-        except Exception as e:
-            return f"Failed to print: {str(e)}"
-    except Exception as e:
-        import traceback
-
-        traceback.print_exc()  # Print the full traceback for debugging
-        return f"An error occurred: {str(e)}"
+    # A positive job ID acknowledges queue submission, not printer delivery.
+    restaurant_table, invoice_printed, invoice_name = frappe.db.get_value(
+        "POS Invoice", name, ["restaurant_table", "invoice_printed", "name"]
+    )
+    frappe.db.set_value("POS Invoice", invoice_name, "invoice_printed", 1)
+    if restaurant_table and invoice_printed == 0:
+        release_merge_cluster_tables(restaurant_table)
+    return "Success"
 
 
 @frappe.whitelist()
-def select_network_printer(pos_profile, invoice_id):
+def select_network_printer(pos_profile, invoice_id, print_format=None):
     invoice_doc = frappe.get_doc("POS Invoice", invoice_id)
     if not frappe.has_permission("POS Invoice", "write", doc=invoice_doc):
         frappe.throw(_("Not permitted to print this invoice"), frappe.PermissionError)
+    if invoice_doc.pos_profile != pos_profile:
+        frappe.throw(_("Printer profile must match the invoice POS Profile."))
 
     table = frappe.db.get_value("POS Invoice", invoice_id, "restaurant_table")
-    print_format = frappe.db.get_value("POS Profile", pos_profile, "print_format")
-
+    print_format = print_format or frappe.db.get_value("POS Profile", pos_profile, "print_format")
     if table:
-        room = frappe.db.get_value("URY Table", table, "restaurant_room")
-        room_bill_printers = frappe.get_all(
-            "URY Printer Settings",
-            filters={"parent": room, "parenttype": "URY Room", "bill": 1},
-            pluck="printer",
-            order_by="idx"
-        )
-        if room_bill_printers:
-            for printer in room_bill_printers:
-                print = network_printing(
-                    "POS Invoice", invoice_id, printer, print_format
-                )
-            return print
-
+        parent = frappe.db.get_value("URY Table", table, "restaurant_room")
+        parenttype = "URY Room"
     else:
-        pos_bill_printers = frappe.get_all(
-            "URY Printer Settings",
-            filters={"parent": pos_profile, "parenttype": "POS Profile", "bill": 1},
-            pluck="printer",
-            order_by="idx"
-        )
-        if pos_bill_printers:
-            for printer in pos_bill_printers:
-                print = network_printing(
-                    "POS Invoice", invoice_id, printer, print_format
-                )
-            return print
+        parent = pos_profile
+        parenttype = "POS Profile"
+    printers = frappe.get_all(
+        "URY Printer Settings",
+        filters={"parent": parent, "parenttype": parenttype, "bill": 1},
+        pluck="printer", order_by="idx",
+    )
+    if not printers:
+        frappe.throw(_("No bill printer is configured for this order."))
+    for printer in printers:
+        network_printing("POS Invoice", invoice_id, printer, print_format)
+    return "Success"
 
 
 @frappe.whitelist()

@@ -230,20 +230,28 @@ export async function getInvoicePrintHtml(invoiceId: string, printFormat: string
 }
 
 export async function networkPrint(orderId: string, printer: string, printFormat: string) {
-  await call.post('ury.ury.api.ury_print.network_printing', {
+  const response = await call.post<{ message: unknown }>('ury.ury.api.ury_print.network_printing', {
     doctype: 'POS Invoice',
     name: orderId,
     printer_setting: printer,
     print_format: printFormat,
   });
+  if (response.message !== 'Success') {
+    throw new Error(typeof response.message === 'string'
+      ? response.message : 'CUPS did not acknowledge print submission.');
+  }
 }
 
 export async function selectNetworkPrinter(orderId: string, posProfile: string, printFormat?: string | null) {
-  await call.post('ury.ury.api.ury_print.select_network_printer', {
+  const response = await call.post<{ message: unknown }>('ury.ury.api.ury_print.select_network_printer', {
     invoice_id: orderId,
     pos_profile: posProfile,
     print_format: printFormat,
   });
+  if (response.message !== 'Success') {
+    throw new Error(typeof response.message === 'string'
+      ? response.message : 'CUPS did not acknowledge print submission.');
+  }
 }
 
 
