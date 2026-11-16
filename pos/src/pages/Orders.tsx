@@ -271,7 +271,11 @@ export default function Orders() {
         posProfile: posStore.posProfile,
         printFormat: resolvePrintFormat(selectedOrder, posStore.posProfile.print_format),
       });
-      showToast.success(t('success.printed'));
+      showToast.success(
+        posStore.posProfile.print_type === 'network'
+          ? t('success.printQueued', { defaultValue: 'Submitted to print queue' })
+          : t('success.printed')
+      );
       // Locally update selectedOrder.invoice_printed to 1
       if (selectedOrder && typeof selectedOrder === 'object') {
         selectOrder({ ...selectedOrder, invoice_printed: 1 });

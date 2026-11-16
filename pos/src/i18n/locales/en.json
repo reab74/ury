@@ -257,6 +257,7 @@
     "order_cancelled": "Order cancelled successfully",
     "order_created": "Order created successfully",
     "order_updated": "Order updated successfully",
+    "printQueued": "Submitted to print queue",
     "printed": "Printed successfully",
     "payment_successful": "Payment successful",
     "order_moved_to_draft": "Order moved to Draft after printing."

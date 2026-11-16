@@ -91,3 +91,24 @@ CUPS job 7 completed; the queue returned to idle with no pending jobs.
 All 10 backend tests, 16 frontend assertions and the production build passed.
 CUPS acceptance confirms submission, not physical printer delivery.
 Offline-after-acceptance and physical hardware remain unverified.
+
+## Live paused-queue recovery — 16 November 2026
+
+Tested unpaid draft REG-00029, total QAR 10.
+Paused only Regnosa_Virtual_Cashier while leaving job acceptance enabled.
+One URY Print click submitted CUPS job 8; no receipt arrived while paused.
+After cupsenable, exactly one receipt reached the emulator automatically,
+without another Print click. The queue returned to idle with no pending jobs.
+
+The UI displayed Printed Successfully before delivery.
+Network-print success wording is being corrected to Submitted to print queue.
+This test verifies paused-queue recovery, not a network outage.
+
+## Network-print wording verification — 17 November 2026
+
+Orders screen now displays Submitted to print queue after network submission.
+Added English, Arabic and French translations.
+Updated Orders, Table and Captain bill-print success messages.
+Corrected the Orders profile reference to posStore.posProfile.
+Frontend build passed. Orders wording verified live.
+Table and Captain wording remain unverified live.

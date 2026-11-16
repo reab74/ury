@@ -230,6 +230,7 @@
     "order_cancelled": "Commande annulée avec succès",
     "order_created": "Commande créée avec succès",
     "order_updated": "Commande mise à jour avec succès",
+    "printQueued": "Envoyé à la file d’attente d’impression",
     "printed": "Imprimé avec succès",
     "payment_successful": "Paiement réussi",
     "order_moved_to_draft": "Commande déplacée en brouillon après impression."

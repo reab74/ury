@@ -209,7 +209,11 @@ const TableView = () => {
           posProfile.print_format
         ),
       });
-      showToast.success('Printed successfully');
+      showToast.success(
+        posProfile.print_type === 'network'
+          ? 'Submitted to print queue'
+          : 'Printed successfully'
+      );
       await loadTables(table.restaurant_room, { useCache: false });
     } catch (error) {
       showToast.error(error instanceof Error ? error.message : 'Failed to print order');

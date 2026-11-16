@@ -303,7 +303,11 @@ export default function CaptainOrder() {
         posProfile,
         printFormat: resolvePrintFormat(context?.order ?? {}, posProfile.print_format),
       });
-      showToast.success('Printed successfully.');
+      showToast.success(
+        posProfile.print_type === 'network'
+          ? 'Submitted to print queue'
+          : 'Printed successfully.'
+      );
     } catch (error) {
       showToast.error(error instanceof Error ? error.message : 'Failed to print bill.');
     } finally {
