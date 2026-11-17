@@ -123,3 +123,18 @@ to the emulator. The order remained unpaid.
 Orders, Tables and Captain network-print wording are now verified live.
 Captain-only user access remains unverified; the route guard documents
 an existing outer billing-access restriction.
+
+## Live network-outage recovery — 18 November 2026
+
+Tested unpaid draft REG-00031 using the dedicated emulator queue.
+Temporarily rejected outbound TCP to 31.76.75.231:10141 only,
+with a scheduled automatic rollback.
+One Print click submitted CUPS job 15. During the block, CUPS reported
+the printer unavailable and retained the job.
+Removed the firewall rule and stopped the fallback timer.
+Exactly one receipt arrived automatically without another Print click
+or manual queue resume. The order remained unpaid.
+The queue returned to idle with no pending jobs.
+
+This verifies recovery from connection rejection before delivery.
+Mid-receipt interruption and physical hardware remain unverified.
