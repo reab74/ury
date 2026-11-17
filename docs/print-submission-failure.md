@@ -112,3 +112,14 @@ Updated Orders, Table and Captain bill-print success messages.
 Corrected the Orders profile reference to posStore.posProfile.
 Frontend build passed. Orders wording verified live.
 Table and Captain wording remain unverified live.
+
+## Table and Captain verification — 18 November 2026
+
+Verified unpaid dine-in order REG-00030 from both the Tables screen
+and Captain Print Bill at /pos/order, using the cashier session.
+Each action displayed Submitted to print queue and delivered one receipt
+to the emulator. The order remained unpaid.
+
+Orders, Tables and Captain network-print wording are now verified live.
+Captain-only user access remains unverified; the route guard documents
+an existing outer billing-access restriction.
