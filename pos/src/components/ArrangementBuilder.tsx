@@ -150,7 +150,7 @@ function ArrangementDialog({ profile, onClose }: { profile: string; onClose: () 
       if (current.posProfile?.name !== profile || current.activeTabId !== initialTab.current) throw new Error(t('arrangements.cart_changed'));
       const item = prepared.item;
       await current.addToOrder({ id: item.item_code, name: item.item_name, price: item.rate, quantity: 1,
-        item: item.item_code, item_name: item.item_name, item_image: null, image: null, course: '',
+        item: item.item_code, item_name: item.item_name, image: null, course: '',
         description: item.description, custom_flora_arrangement: prepared.arrangement });
       if (!usePOSStore.getState().activeOrders.some(row => row.custom_flora_arrangement === prepared.arrangement)) {
         throw new Error(t('arrangements.add_failed'));

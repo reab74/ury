@@ -438,4 +438,21 @@ export async function mergeBills(
     throw new Error(result.message || 'Failed to merge bills');
   }
   return result;
-} 
+}
+
+// Existing authenticated server endpoints: no private key is sent to the browser.
+export async function getQzCertificate(): Promise<string> {
+  const response = await call.get('ury.ury.api.ury_print.qz_certificate');
+  if (typeof response.message !== 'string' || !response.message.includes('BEGIN CERTIFICATE')) {
+    throw new Error('QZ certificate is not configured on this site.');
+  }
+  return response.message;
+}
+
+export async function signQzPayload(toSign: string): Promise<string> {
+  const response = await call.post('ury.ury.api.ury_print.signature_promise', { toSign });
+  if (typeof response.message !== 'string' || !response.message.trim()) {
+    throw new Error('QZ server signing did not return a signature.');
+  }
+  return response.message;
+}

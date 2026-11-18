@@ -14,15 +14,23 @@ interface PrintOrderParams {
 }
 
 export async function printOrder({ orderId, posProfile, printFormat }: PrintOrderParams): Promise<'qz' | 'network' | 'socket'> {
-  const { print_type, qz_host, print_format, printer, name, cashier, multiple_cashier } = posProfile;
+  const { print_type, qz_print, qz_host, print_format, printer, name, cashier, multiple_cashier } = posProfile;
   const format = printFormat || print_format;
 
   if (print_type === 'qz') {
+    if (Number(qz_print) !== 1) {
+      throw new Error('QZ printing is disabled on this POS Profile.');
+    }
+    // Per-browser workstation selection; never interpret CUPS settings as a Windows printer.
+    const printerName = window.localStorage.getItem(`ury.qz.printer.${name}`)?.trim();
+    if (!printerName) {
+      throw new Error('Select a Windows QZ printer for this workstation before printing.');
+    }
     if (!qz_host) {
       throw new Error('QZ host is not set');
     }
     const html = await getInvoicePrintHtml(orderId, format as string);
-    await printWithQz(qz_host, html);
+    await printWithQz(qz_host, html, printerName);
     await updatePrintStatus(orderId);
     return 'qz';
   } else if (print_type === 'network') {
