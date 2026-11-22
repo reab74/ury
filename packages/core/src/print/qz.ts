@@ -76,7 +76,7 @@ export async function printWithQz(host: string, htmlToPrint: string, printerName
     if (typeof printer !== 'string' || !printer.trim()) {
       throw new Error('QZ did not resolve a single printer name.');
     }
-    const config = qz.configs.create(printer);
+    const config = qz.configs.create(printer, { scaleContent: false });
     await qz.print(config, data as any);
   };
 

@@ -126,3 +126,18 @@ builds passed. Management frontend type checking still reports 39 errors.
 The local Epson driver reached the Windows ESC/POS emulator, but its
 GS 8 L graphics output rendered incorrectly. Epson/emulator compatibility,
 80mm sizing, cutting and physical USB printing remain unverified.
+
+## QZ receipt layout verification — 2026-11-22
+
+- Wrapped receipt HTML in a complete UTF-8 document with a `.print-format`
+  container and zero body margins. Empty HTML is rejected.
+- Disabled QZ automatic content scaling to preserve receipt dimensions.
+- Verified short and 20-item draft receipts using the Epson TM-T88V Receipt5
+  Windows driver and ZplEscPrinter emulator.
+- Investigated excessive leading whitespace using a captured RAW job:
+  the first raster block contains heading pixels on its first row.
+  The preceding feed command requests 74 motion units, approximately 9 mm
+  at 203 dpi. The large displayed blank area points to emulator rendering.
+- QZ transport checks, print submission checks, core and POS TypeScript
+  checks, and the POS production build passed.
+- Physical printer spacing and cutting remain unverified.

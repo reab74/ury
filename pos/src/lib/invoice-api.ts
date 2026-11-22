@@ -222,7 +222,18 @@ export async function getInvoicePrintHtml(invoiceId: string, printFormat: string
         settings: {}
       }
     );
-    return response.message.html;
+    const html = response.message.html;
+    if (typeof html !== 'string' || !html.trim()) {
+      throw new Error('Print HTML is empty.');
+    }
+    return `<!DOCTYPE html>
+<html>
+<head>
+<meta charset="UTF-8">
+<style>html, body { margin: 0; padding: 0; }</style>
+</head>
+<body><div class="print-format">${html}</div></body>
+</html>`;
   } catch (error) {
     console.error('Error fetching invoice print HTML:', error);
     throw new Error('Failed to fetch invoice print HTML');
